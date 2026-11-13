@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,8 +18,10 @@ import (
 
 	"github.com/Islomov49/gapi-voice-studio/server/internal/analyze"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/compile"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/crm"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/gapi"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/model"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/phone"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/rules"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/seal"
 )
@@ -118,7 +121,7 @@ func (e *Engine) Tick(ctx context.Context) {
 	steps := []struct {
 		name string
 		run  func(context.Context, map[string]string) error
-	}{{"settle", e.settle}, {"advance", e.advance}, {"dial", e.dial}}
+	}{{"settle", e.settle}, {"feed", e.feed}, {"advance", e.advance}, {"dial", e.dial}, {"crm", e.writeBack}}
 	for _, step := range steps {
 		if err := step.run(ctx, tokens); err != nil && ctx.Err() == nil {
 			slog.Error("dialer: "+step.name, "err", err)
@@ -276,7 +279,10 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 	if c.targetID != nil {
 		var attempts int
 		var r model.Rules
-		if err := tx.QueryRow(ctx, `select t.attempts, c.rules from targets t join campaigns c on c.id = t.campaign_id where t.id = $1 for update of t`, *c.targetID).Scan(&attempts, &r); err != nil {
+		var ref string
+		var inCRM bool
+		if err := tx.QueryRow(ctx, `select t.attempts, t.ref, c.rules, c.crm is not null from targets t join campaigns c on c.id = t.campaign_id where t.id = $1 for update of t`,
+			*c.targetID).Scan(&attempts, &ref, &r, &inCRM); err != nil {
 			return err
 		}
 		d := rules.AfterCall(r, attempts, rules.Ended{Status: g.Status, EndReason: g.EndReason, Outcome: outcome, CallbackAt: res.CallbackAt, DoNotCall: res.DoNotCall}, now)
@@ -286,6 +292,12 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 		}
 		if _, err := tx.Exec(ctx, `update targets set status = $2, next_at = $3, result = $4 where id = $1`, *c.targetID, d.Status, next, d.Result); err != nil {
 			return err
+		}
+		// the person's calls are over and they stand for a card of a CRM: the card hears of it
+		if d.Status != "pending" && ref != "" && inCRM {
+			if _, err := tx.Exec(ctx, `update calls set crm_state = 'call' where id = $1`, c.id); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit(ctx)
@@ -350,8 +362,9 @@ func (e *Engine) advance(ctx context.Context, _ map[string]string) error {
 			continue
 		}
 		// Nobody new to hand out: the campaign is over once the people waiting
-		// for another attempt have had it.
-		if _, err := e.DB.Exec(ctx, `update campaigns set status = 'done', finished_at = $2 where id = $1 and status = 'running'
+		// for another attempt have had it. One that takes new cards from a CRM
+		// stage is never over by itself.
+		if _, err := e.DB.Exec(ctx, `update campaigns set status = 'done', finished_at = $2 where id = $1 and status = 'running' and crm->'feed' is null
 			and not exists (select 1 from targets where campaign_id = $1 and status in ('pending', 'calling'))`, c.id, e.Now()); err != nil {
 			return err
 		}
@@ -522,3 +535,147 @@ func FirstPortion(ctx context.Context, tx pgx.Tx, campaignID string, r model.Rul
 
 // Raw is a jsonb value read as it is.
 type Raw = json.RawMessage
+
+// connector opens a workspace's kept CRM connection.
+func (e *Engine) connector(ctx context.Context, workspaceID, id string) (crm.Connector, string, error) {
+	var kind, base string
+	var sealed []byte
+	if err := e.DB.QueryRow(ctx, `select kind, base, secret_sealed from crm_connections where id = $1 and workspace_id = $2`, id, workspaceID).Scan(&kind, &base, &sealed); err != nil {
+		return nil, "", errors.New("the CRM connection is gone")
+	}
+	secret, err := e.Seal.Open(sealed)
+	if err != nil {
+		return nil, "", errors.New("the CRM connection's secret can no longer be read; connect it again")
+	}
+	c, err := crm.Open(kind, base, secret)
+	return c, kind, err
+}
+
+// feed adds to a running campaign the cards that have arrived at its CRM
+// stage since it last looked, once a minute.
+func (e *Engine) feed(ctx context.Context, _ map[string]string) error {
+	now := e.Now()
+	rows, err := e.DB.Query(ctx, `select id, workspace_id, crm from campaigns where status = 'running' and crm->'feed' is not null
+		and (crm_fed_at is null or crm_fed_at < $1)`, now.Add(-time.Minute))
+	if err != nil {
+		return err
+	}
+	type fed struct {
+		id, workspaceID string
+		rules           crm.Rules
+	}
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (fed, error) {
+		f := fed{}
+		return f, row.Scan(&f.id, &f.workspaceID, &f.rules)
+	})
+	if err != nil {
+		return err
+	}
+	for _, f := range list {
+		if _, err := e.DB.Exec(ctx, `update campaigns set crm_fed_at = $2 where id = $1`, f.id, now); err != nil {
+			return err
+		}
+		conn, kind, err := e.connector(ctx, f.workspaceID, f.rules.ConnectionID)
+		if err != nil {
+			slog.Warn("dialer: a campaign's CRM", "campaign", f.id, "err", err)
+			continue
+		}
+		cards, err := conn.Cards(ctx, f.rules.Feed.Entity, f.rules.Feed.PipelineID, f.rules.Feed.StageID, 500)
+		if err != nil {
+			slog.Warn("dialer: reading a CRM stage", "campaign", f.id, "err", err)
+			continue
+		}
+		for _, card := range cards {
+			number, ok := phone.Normalize(card.Phone)
+			if !ok {
+				continue
+			}
+			if _, err := e.DB.Exec(ctx, `insert into targets (campaign_id, row_no, phone, vars, ref)
+				select $1, coalesce((select max(row_no) from targets where campaign_id = $1), 0) + 1, $2, $3, $4
+				where not exists (select 1 from targets where campaign_id = $1 and (ref = $4 or phone = $2))`,
+				f.id, number, crm.Variables(card), crm.Ref(kind, card.Entity, card.ID)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// writeBack tells the CRM what the calls came to: a few cards a round, so a
+// portal's request limit is kept.
+func (e *Engine) writeBack(ctx context.Context, _ map[string]string) error {
+	rows, err := e.DB.Query(ctx, `select k.id, k.crm_state, k.duration_seconds, k.summary, k.answers, t.ref, t.result, t.attempts, c.crm, c.workspace_id, a.name, v.spec
+		from calls k join targets t on t.id = k.target_id join campaigns c on c.id = k.campaign_id
+		join agent_versions v on v.id = k.agent_version_id join agents a on a.id = v.agent_id
+		where k.crm_state in ('call', 'form') and c.crm is not null order by k.ended_at limit 3`)
+	if err != nil {
+		return err
+	}
+	type due struct {
+		id, state, summary, ref, result, workspaceID, agent string
+		seconds                                             *float64
+		answers                                             map[string]model.Answer
+		attempts                                            int
+		rules                                               crm.Rules
+		spec                                                model.Spec
+	}
+	list, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (due, error) {
+		d := due{}
+		return d, row.Scan(&d.id, &d.state, &d.seconds, &d.summary, &d.answers, &d.ref, &d.result, &d.attempts, &d.rules, &d.workspaceID, &d.agent, &d.spec)
+	})
+	if err != nil {
+		return err
+	}
+	for _, d := range list {
+		err := func() error {
+			conn, kind, err := e.connector(ctx, d.workspaceID, d.rules.ConnectionID)
+			if err != nil {
+				return err
+			}
+			refKind, entity, id, ok := crm.ParseRef(d.ref)
+			if !ok || refKind != kind {
+				return errors.New("the person is not a card of this CRM")
+			}
+			if d.state == "form" {
+				return conn.Note(ctx, entity, id, crm.FormNote(d.agent, d.spec.Form, d.answers, d.summary))
+			}
+			if d.rules.Note {
+				seconds := 0.0
+				if d.seconds != nil {
+					seconds = *d.seconds
+				}
+				note := crm.CallNote(d.agent, d.result, d.attempts, seconds, d.summary)
+				if len(d.answers) > 0 {
+					note += "\n" + crm.FormNote(d.agent, d.spec.Form, d.answers, "")
+				}
+				if err := conn.Note(ctx, entity, id, note); err != nil {
+					return err
+				}
+			}
+			if to, ok := crm.For(d.rules.Move, d.result); ok && to.StageID != "" {
+				if err := conn.Move(ctx, entity, id, to.PipelineID, to.StageID); err != nil {
+					return err
+				}
+			}
+			if text, ok := crm.For(d.rules.Task, d.result); ok && strings.TrimSpace(text) != "" {
+				who, _ := conn.Responsible(ctx, entity, id)
+				if err := conn.Task(ctx, entity, id, who, text, e.Now().Add(24*time.Hour)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}()
+		state, reason := "done", ""
+		if err != nil {
+			state, reason = "failed", err.Error()
+			if len(reason) > 300 {
+				reason = reason[:300]
+			}
+			slog.Warn("dialer: writing to a CRM", "call", d.id, "err", err)
+		}
+		if _, err := e.DB.Exec(ctx, `update calls set crm_state = $2, crm_error = $3 where id = $1 and crm_state = $4`, d.id, state, reason, d.state); err != nil {
+			return err
+		}
+	}
+	return nil
+}

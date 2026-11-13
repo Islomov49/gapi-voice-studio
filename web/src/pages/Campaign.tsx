@@ -4,6 +4,7 @@ import { api, ApiError, type Campaign, type Field, type Rules, type Target } fro
 import { usePoll } from '../App'
 import { campaignStatus, pauseReason, result, say, seconds, targetStatus, when } from '../ru'
 import { RulesEditor } from './Campaigns'
+import CrmRulesCard from './CrmRulesCard'
 
 type Detail = { campaign: Campaign; results: Record<string, number>; calls: { placed: number; answered: number; seconds: number; charged_g: number } }
 
@@ -160,6 +161,7 @@ export default function CampaignPage() {
           </div>
         </details>
       </div>
+      <CrmRulesCard campaign={c} editable={editable} onSaved={load} />
       <div className="card">
         <div className="spread" style={{ marginBottom: 10 }}>
           <h2 style={{ margin: 0 }}>Результаты</h2>

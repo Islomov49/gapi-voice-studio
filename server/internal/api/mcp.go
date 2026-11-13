@@ -143,16 +143,41 @@ var mcpTools = []mcpTool{
 		InputSchema: obj([]string{"filename"}, map[string]any{"filename": str("The file's name with its extension, e.g. clients.xlsx"), "text": str("A .csv file's text"),
 			"content_base64": str("An .xlsx file's bytes, base64"), "name": str("The list's name"), "phone_column": str("The header of the column with the numbers, when it is not guessed")}),
 		custom: importContacts},
+	{Name: "import_contact_rows", Description: "Make a list from rows you hold, for people who come from another system (a CRM you reach with other tools): each row is {\"phone\": ..., \"ref\": that system's id of the person, any other key: a variable of the script}. " +
+		"ref comes back with campaign_results, which is how you write the outcomes to that system.",
+		InputSchema: obj([]string{"rows"}, map[string]any{"name": str("The list's name"),
+			"rows": map[string]any{"type": "array", "items": map[string]any{"type": "object"}, "description": "The people, up to 20,000"}}),
+		call: func(a map[string]any) (string, string, any) {
+			return "POST", "/api/lists/rows", pick(a, "name", "rows")
+		}},
+	{Name: "crm_connections", Description: "The CRMs connected to the Studio (Bitrix24, amoCRM). Connecting one takes its secret, which the person enters in the interface, page \"CRM\": never ask for it in the chat.",
+		InputSchema: obj(nil, map[string]any{}),
+		call:        func(a map[string]any) (string, string, any) { return "GET", "/api/crm", nil }},
+	{Name: "crm_pipelines", Description: "A connected CRM's pipelines with their stages: the ids that crm_import_stage and a campaign's crm rules name. entity is \"deal\" or \"lead\".",
+		InputSchema: obj([]string{"connection_id"}, map[string]any{"connection_id": str("The connection's id")}),
+		call: func(a map[string]any) (string, string, any) {
+			return "GET", "/api/crm/" + arg(a, "connection_id") + "/pipelines", nil
+		}},
+	{Name: "crm_import_stage", Description: "Make a list of the people whose cards stand at a stage of a CRM pipeline now. Each person remembers their card, so a campaign over the list can write its results onto the cards.",
+		InputSchema: obj([]string{"connection_id", "entity", "stage_id"}, map[string]any{"connection_id": str("The connection's id"), "entity": str("deal or lead, as crm_pipelines says"),
+			"pipeline_id": str("The pipeline's id"), "stage_id": str("The stage's id"), "name": str("The list's name")}),
+		call: func(a map[string]any) (string, string, any) {
+			return "POST", "/api/crm/" + arg(a, "connection_id") + "/import", pick(a, "entity", "pipeline_id", "stage_id", "name")
+		}},
 	{Name: "list_contact_lists", Description: "The uploaded lists with their sizes and columns.",
 		InputSchema: obj(nil, map[string]any{}),
 		call:        func(a map[string]any) (string, string, any) { return "GET", "/api/lists", nil }},
 	{Name: "create_campaign", Description: "Make a campaign as a draft: an agent's version, a list and the calling rules. Nothing is dialled until start_campaign. " +
 		"rules (all optional, the defaults are sound): {\"from\": \"09:00\", \"to\": \"20:00\" (Tashkent time, never outside 08:00-21:00), \"days\": [1..7, 1 = Monday], \"max_attempts\": 1-5, " +
-		"\"retry_minutes\", \"first_portion\": people in the first portion, \"portion\": people in the next ones}.",
-		InputSchema: obj([]string{"name", "version_id", "list_id"}, map[string]any{"name": str("The campaign's name"), "version_id": str("The agent version to call with"),
-			"list_id": str("The list to call"), "line": str("The Gapi line to call from, when the project has several"), "rules": any_("The calling rules")}),
+		"\"retry_minutes\", \"first_portion\": people in the first portion, \"portion\": people in the next ones}. " +
+		"crm (optional, for a list that came from crm_import_stage): {\"connection_id\", \"note\": true to write a note onto each card when the person's calls are over, " +
+		"\"move\": {result: {\"pipeline_id\", \"stage_id\"}}, \"task\": {result: the task's words for the card's responsible person}, " +
+		"\"feed\": {\"entity\", \"pipeline_id\", \"stage_id\"} to keep adding the cards that arrive at a stage while the campaign runs (then list_id may be left out)}. " +
+		"A result is agreed, resolved, declined, callback, lost_interest, do_not_call, no_answer, busy, wrong_number, or \"*\" for any other.",
+		InputSchema: obj([]string{"name", "version_id"}, map[string]any{"name": str("The campaign's name"), "version_id": str("The agent version to call with"),
+			"list_id": str("The list to call"), "line": str("The Gapi line to call from, when the project has several"), "rules": any_("The calling rules"), "crm": any_("What the campaign does in the CRM")}),
 		call: func(a map[string]any) (string, string, any) {
-			return "POST", "/api/campaigns", pick(a, "name", "version_id", "list_id", "line", "rules")
+			return "POST", "/api/campaigns", pick(a, "name", "version_id", "list_id", "line", "rules", "crm")
 		}},
 	{Name: "list_campaigns", Description: "The project's campaigns with their state and how many people each has been through.",
 		InputSchema: obj(nil, map[string]any{}),

@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -80,8 +82,25 @@ func (s *Server) uploadList(w http.ResponseWriter, r *http.Request, ws *Workspac
 	if name == "" {
 		name = strings.TrimSuffix(header.Filename, "."+lastExt(header.Filename))
 	}
+	out, err := s.saveList(r.Context(), ws, name, columns, contacts, stats, strings.TrimSpace(sheet.Headers[column]), nil)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusCreated, out)
+	return nil
+}
+
+// saveList keeps a list of people, wherever it came from: a sheet, rows an
+// assistant sent, a CRM's stage.
+func (s *Server) saveList(ctx context.Context, ws *Workspace, name string, columns []sheets.Column, contacts []sheets.Contact, stats sheets.Stats, phoneColumn string, source any) (map[string]any, error) {
 	if len([]rune(name)) > 120 {
 		name = string([]rune(name)[:120])
+	}
+	if name == "" {
+		name = "List"
+	}
+	if columns == nil {
+		columns = []sheets.Column{}
 	}
 	// how many of the accepted numbers are on the stop list: they stay in the
 	// list and are skipped when a campaign reaches them
@@ -90,33 +109,104 @@ func (s *Server) uploadList(w http.ResponseWriter, r *http.Request, ws *Workspac
 		numbers[i] = c.Phone
 	}
 	var stopped int
-	if err := s.DB.QueryRow(r.Context(), `select count(*) from stoplist where workspace_id = $1 and phone = any($2)`, ws.ID, numbers).Scan(&stopped); err != nil {
-		return err
+	if err := s.DB.QueryRow(ctx, `select count(*) from stoplist where workspace_id = $1 and phone = any($2)`, ws.ID, numbers).Scan(&stopped); err != nil {
+		return nil, err
 	}
-	tx, err := s.DB.Begin(r.Context())
+	tx, err := s.DB.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback(ctx)
 	var id string
-	statsOut := map[string]any{"rows": stats.Rows, "accepted": stats.Accepted, "duplicates": stats.Duplicates, "invalid": stats.Invalid, "stopped": stopped,
-		"phone_column": strings.TrimSpace(sheet.Headers[column])}
-	if err := tx.QueryRow(r.Context(), `insert into contact_lists (workspace_id, name, columns, stats) values ($1, $2, $3, $4) returning id`,
-		ws.ID, name, columns, statsOut).Scan(&id); err != nil {
-		return err
+	statsOut := map[string]any{"rows": stats.Rows, "accepted": stats.Accepted, "duplicates": stats.Duplicates, "invalid": stats.Invalid, "stopped": stopped, "phone_column": phoneColumn}
+	if err := tx.QueryRow(ctx, `insert into contact_lists (workspace_id, name, columns, stats, source) values ($1, $2, $3, $4, $5) returning id`,
+		ws.ID, name, columns, statsOut, source).Scan(&id); err != nil {
+		return nil, err
 	}
 	rows := make([][]any, len(contacts))
 	for i, c := range contacts {
-		rows[i] = []any{id, c.Row, c.Phone, c.Data}
+		rows[i] = []any{id, c.Row, c.Phone, c.Data, c.Ref}
 	}
-	if _, err := tx.CopyFrom(r.Context(), pgx.Identifier{"contacts"}, []string{"list_id", "row_no", "phone", "data"}, pgx.CopyFromRows(rows)); err != nil {
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"contacts"}, []string{"list_id", "row_no", "phone", "data", "ref"}, pgx.CopyFromRows(rows)); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": id, "name": name, "columns": columns, "stats": statsOut}, nil
+}
+
+// uploadRows: POST /api/lists/rows {"name", "rows": [{"phone": "...", "ref": "...", "client_name": "..."}]}:
+// a list given as rows rather than a file, which is how an assistant brings
+// people from another system. "phone" is the number; "ref" is the person's id
+// there, given back with the results; every other key is a variable.
+func (s *Server) uploadRows(w http.ResponseWriter, r *http.Request, ws *Workspace) error {
+	var req struct {
+		Name string              `json:"name"`
+		Rows []map[string]string `json:"rows"`
+	}
+	if err := readJSON(r, &req); err != nil {
 		return err
 	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if len(req.Rows) == 0 || len(req.Rows) > sheets.MaxRows {
+		return bad("rows_invalid", "send 1 to 20,000 rows")
+	}
+	columns, contacts, stats, err := contactsOfRows(req.Rows)
+	if err != nil {
+		return bad("rows_invalid", err.Error())
+	}
+	if len(contacts) == 0 {
+		return bad("rows_invalid", "no row has a phone number under \"phone\"")
+	}
+	out, err := s.saveList(r.Context(), ws, strings.TrimSpace(req.Name), columns, contacts, stats, "phone", nil)
+	if err != nil {
 		return err
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "name": name, "columns": columns, "stats": statsOut})
+	writeJSON(w, http.StatusCreated, out)
 	return nil
+}
+
+// contactsOfRows reads rows of {key: value} as contacts.
+func contactsOfRows(rows []map[string]string) ([]sheets.Column, []sheets.Contact, sheets.Stats, error) {
+	stats := sheets.Stats{Rows: len(rows)}
+	keys := map[string]string{} // a row's key to the variable's name
+	var columns []sheets.Column
+	seen := map[string]bool{}
+	var contacts []sheets.Contact
+	for i, row := range rows {
+		number, ok := phone.Normalize(row["phone"])
+		switch {
+		case !ok:
+			stats.Invalid++
+			continue
+		case seen[number]:
+			stats.Duplicates++
+			continue
+		}
+		seen[number] = true
+		c := sheets.Contact{Row: i + 1, Phone: number, Ref: strings.TrimSpace(row["ref"]), Data: map[string]string{}}
+		if len(c.Ref) > 200 {
+			return nil, nil, stats, errors.New("a ref is at most 200 characters")
+		}
+		for k, v := range row {
+			if k == "phone" || k == "ref" || strings.TrimSpace(v) == "" {
+				continue
+			}
+			name, known := keys[k]
+			if !known {
+				if len(keys) >= sheets.MaxColumns {
+					return nil, nil, stats, errors.New("rows have more than 40 different keys")
+				}
+				name = sheets.Key(k)
+				keys[k] = name
+				columns = append(columns, sheets.NewColumn(name, k))
+			}
+			c.Data[name] = strings.TrimSpace(v)
+		}
+		contacts = append(contacts, c)
+	}
+	stats.Accepted = len(contacts)
+	return columns, contacts, stats, nil
 }
 
 func lastExt(name string) string {

@@ -64,6 +64,19 @@ export type Campaign = {
   started_at: string | null
   finished_at: string | null
   counts: Record<string, number>
+  crm: CrmRules | null
+  crm_failed: number
+}
+
+export type CrmConnection = { id: string; kind: string; name: string; base: string; created_at: string }
+export type Pipeline = { entity: string; id: string; name: string; stages: { id: string; name: string }[] }
+export type StageRef = { pipeline_id: string; stage_id: string }
+export type CrmRules = {
+  connection_id: string
+  note: boolean
+  move?: Record<string, StageRef>
+  task?: Record<string, string>
+  feed?: { entity: string; pipeline_id: string; stage_id: string } | null
 }
 
 export type Answer = { value: unknown; quote?: string; edited?: boolean }
@@ -130,4 +143,5 @@ export type Target = {
   duration_seconds: number | null
   summary: string | null
   answers: Record<string, Answer> | null
+  ref?: string
 }

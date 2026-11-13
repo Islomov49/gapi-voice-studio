@@ -29,6 +29,21 @@ Connect an assistant:
 
 and ask it, for example: "Read AGENTS.md. Make a feedback agent for my furniture shop and call me to test it."
 
+## Bitrix24 and amoCRM
+
+Connect a CRM on the page "CRM" (Bitrix24: an inbound webhook with the right "CRM"; amoCRM: an integration's
+long-lived token). Then:
+
+- make a list of the people whose cards stand at a stage of a pipeline;
+- let a campaign write onto each card when the person's calls are over: a comment with the result and the
+  answers, another stage by result, a to-do for the card's manager;
+- let a campaign follow a stage: cards that arrive there are called within a minute or two.
+
+The Studio asks the CRM, never the other way round, so it works from your machine with no public address.
+The connectors follow the vendors' REST APIs as used in production elsewhere and pass tests against stand-in
+servers; say so in an issue if your portal answers differently. Any other system works through your assistant:
+it brings people in as rows with their ids (`import_contact_rows`) and takes the results back by those ids.
+
 ## The rules it holds
 
 Whoever asks, the interface or an assistant, the service checks these before each dial:

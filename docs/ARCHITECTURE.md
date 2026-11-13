@@ -12,6 +12,7 @@ public voice API and of nothing else: every call goes out through the Gapi proje
 | `internal/analyze` | Reads a finished call's text without a language model: the greeting check and the plain ways people say "do not call me" |
 | `internal/sheets`, `internal/phone` | Upload of .xlsx/.csv, numbers to `+998...`, results as .xlsx |
 | `internal/templates` | The four task types: feedback, lead qualification, reminder, win-back |
+| `internal/crm` | Bitrix24 (inbound webhook) and amoCRM (long-lived token, API v4) behind one interface: pipelines, the cards at a stage, a note, a stage change, a to-do. `crmtest` stands in for both in tests |
 | `internal/api` | The interface's HTTP API (session by cookie) and the MCP server (`mcp.go`), whose tools are the same endpoints called from inside the process |
 
 ## A call
@@ -25,6 +26,14 @@ when one has ended it fetches the text, runs the checks, and decides the person'
 The greeting is not sent as the call's first line. On a call the agent places, the person who picks up says
 "Alo" first and Gapi's own short "Alo?" answers it; the greeting stands word for word inside the script's
 first stage (`{{studio_greeting}}`), or as a rule at the end of a script that has no such place.
+
+## A CRM
+
+A person of a list may stand for a card (`ref`, "bitrix24:deal:123"). The dialer's round has two CRM steps:
+`feed` reads a running campaign's stage once a minute and adds the people of cards it has not seen, and
+`writeBack` takes up to three finished people a round and writes what the campaign's rules say (a note, a stage,
+a to-do), which keeps a portal's request limit. Everything is a request from the Studio to the CRM; nothing
+listens for the CRM.
 
 ## No language model inside
 
@@ -43,4 +52,5 @@ they are; lists and tables show them masked unless asked, and MCP answers always
 
 - "Call me back at five" is retried after the campaign's ordinary pause; the named time is not read.
 - The dialer assumes one running copy of the service.
-- No CRM connection: an assistant can move data between a CRM and the Studio with the CRM's own tools.
+- The CRM connectors have run against stand-in servers only, modelled on the vendors' documented answers.
+- A card's result is written once, when the person's calls are over; a failed write is shown and not retried.

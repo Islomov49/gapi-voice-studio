@@ -354,7 +354,9 @@ func (s *Server) fillForm(w http.ResponseWriter, r *http.Request, ws *Workspace)
 			return bad("summary_invalid", "a summary is at most 600 characters")
 		}
 	}
-	if _, err := tx.Exec(r.Context(), `update calls set answers = $2, summary = $3 where id = $1`, r.PathValue("id"), answers, summary); err != nil {
+	// a call whose result the CRM has already heard gets its form sent after it
+	if _, err := tx.Exec(r.Context(), `update calls set answers = $2, summary = $3,
+		crm_state = case when crm_state in ('done', 'failed') then 'form' else crm_state end where id = $1`, r.PathValue("id"), answers, summary); err != nil {
 		return err
 	}
 	if err := tx.Commit(r.Context()); err != nil {

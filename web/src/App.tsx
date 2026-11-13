@@ -10,6 +10,7 @@ import Campaigns from './pages/Campaigns'
 import CampaignPage from './pages/Campaign'
 import CallPage from './pages/Call'
 import StopList from './pages/StopList'
+import Crm from './pages/Crm'
 
 type Session = { me: Me; reload: () => Promise<void> }
 const Ctx = createContext<Session | null>(null)
@@ -108,6 +109,7 @@ export default function App() {
           <NavLink to="/agents">Агенты</NavLink>
           <NavLink to="/lists">Контакты</NavLink>
           <NavLink to="/campaigns">Обзвоны</NavLink>
+          <NavLink to="/crm">CRM</NavLink>
           <NavLink to="/stoplist">Стоп-лист</NavLink>
           <div className="foot">
             {me.workspace.name || 'Проект Gapi'}
@@ -128,6 +130,7 @@ export default function App() {
             <Route path="/campaigns" element={<Campaigns />} />
             <Route path="/campaigns/:id" element={<CampaignPage />} />
             <Route path="/calls/:id" element={<CallPage />} />
+            <Route path="/crm" element={<Crm />} />
             <Route path="/stoplist" element={<StopList />} />
           </Routes>
         </main>

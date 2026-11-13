@@ -224,6 +224,7 @@ func (s *Server) routes() map[string]handler {
 
 		"GET /api/lists":         s.listLists,
 		"POST /api/lists":        s.uploadList,
+		"POST /api/lists/rows":   s.uploadRows,
 		"GET /api/lists/{id}":    s.getList,
 		"DELETE /api/lists/{id}": s.archiveList,
 
@@ -235,6 +236,12 @@ func (s *Server) routes() map[string]handler {
 		"POST /api/campaigns/{id}/pause":      s.pauseCampaign,
 		"GET /api/campaigns/{id}/targets":     s.listTargets,
 		"GET /api/campaigns/{id}/export.xlsx": s.exportCampaign,
+
+		"GET /api/crm":                s.listCRM,
+		"POST /api/crm":               s.connectCRM,
+		"DELETE /api/crm/{id}":        s.disconnectCRM,
+		"GET /api/crm/{id}/pipelines": s.crmPipelines,
+		"POST /api/crm/{id}/import":   s.crmImport,
 
 		"GET /api/stoplist":            s.listStop,
 		"POST /api/stoplist":           s.addStop,

@@ -26,6 +26,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"github.com/Islomov49/gapi-voice-studio/server/internal/analyze"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/crm/crmtest"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/db"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/dialer"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/gapi"
@@ -453,5 +454,89 @@ func TestMCP(t *testing.T) {
 	f.tick()
 	if open := must("list_calls", map[string]any{"needs_form": true})["calls"].([]any); len(open) != 1 {
 		t.Fatalf("calls waiting for their form: %d", len(open))
+	}
+}
+
+// A campaign over the cards of a CRM stage: the people come from the stage,
+// each result is written onto its card, and cards that arrive later join.
+func TestCRM(t *testing.T) {
+	f := newFixture(t)
+	portal := crmtest.NewBitrix()
+	defer portal.Close()
+	portal.Deals = []crmtest.Deal{{ID: "7", Title: "Стол", Stage: "NEW", Contact: "70", Assigned: "5"}, {ID: "8", Title: "Без телефона", Stage: "NEW", Contact: "0"}}
+	portal.Contacts["70"] = [2]string{"Ali", "+998 90 111 00 01"}
+	portal.Contacts["71"] = [2]string{"Vali", "90 111 00 02"}
+
+	f.must("POST", "/api/connect", map[string]any{"token": "gapi_ab12cd34_0123456789abcdef0123456789abcdef"})
+	f.must("PUT", "/api/workspace", map[string]any{"tester_phone": "+998900000001"})
+	version := f.must("POST", "/api/agents", map[string]any{"template": "feedback"})["latest"].(map[string]any)["id"].(string)
+	test := f.must("POST", "/api/calls/test", map[string]any{"version_id": version})["call_id"].(string)
+	f.fake.Talk("g1", "agreed", f.now, "Alo?", ">Alo", greeting)
+	f.tick()
+	f.must("POST", "/api/calls/"+test+"/verdict", map[string]any{"accepted": true})
+
+	// a webhook that is not one is refused; the stand-in portal speaks http, so its row is written directly
+	f.refused("POST", "/api/crm", map[string]any{"kind": "bitrix24", "webhook": "https://example.bitrix24.kz/crm/"}, "crm_invalid")
+	sealer, _ := seal.New("a secret long enough for a test")
+	var connection string
+	if err := f.pool.QueryRow(context.Background(), `insert into crm_connections (workspace_id, kind, name, base, secret_sealed)
+		select id, 'bitrix24', 'portal', $1, $2 from workspaces returning id`, portal.URL, sealer.Seal(portal.Secret())).Scan(&connection); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.must("GET", "/api/crm/"+connection+"/pipelines", nil)["pipelines"].([]any); len(p) != 3 {
+		t.Fatalf("pipelines: %v", p)
+	}
+	list := f.must("POST", "/api/crm/"+connection+"/import", map[string]any{"entity": "deal", "pipeline_id": "0", "stage_id": "NEW", "name": "Новые сделки"})
+	if stats := list["stats"].(map[string]any); stats["accepted"] != 1.0 || stats["invalid"] != 1.0 {
+		t.Fatalf("the stage as a list: %v", list)
+	}
+
+	crmRules := map[string]any{"connection_id": connection, "note": true,
+		"move": map[string]any{"agreed": map[string]any{"pipeline_id": "0", "stage_id": "WON"}, "*": map[string]any{"pipeline_id": "0", "stage_id": "LOSE"}},
+		"task": map[string]any{"agreed": "Клиент согласен: перезвонить и оформить"},
+		"feed": map[string]any{"entity": "deal", "pipeline_id": "0", "stage_id": "NEW"}}
+	f.refused("POST", "/api/campaigns", map[string]any{"name": "c", "version_id": version, "list_id": list["id"], "crm": map[string]any{"connection_id": "00000000-0000-0000-0000-000000000000"}}, "crm_invalid")
+	campaign := f.must("POST", "/api/campaigns", map[string]any{"name": "CRM", "version_id": version, "list_id": list["id"], "crm": crmRules,
+		"rules": map[string]any{"from": "09:00", "to": "20:00", "days": []int{1}, "max_attempts": 1, "retry_minutes": 60, "first_portion": 5, "portion": 5}})["campaign"].(map[string]any)["id"].(string)
+	f.must("POST", "/api/campaigns/"+campaign+"/start", nil)
+	f.tick()
+	placed := f.fake.Placed()
+	if len(placed) != 2 || placed[1].To != "+998901110001" || placed[1].Variables["client_name"] != "Ali" {
+		t.Fatalf("the call to the card's person: %+v", placed[len(placed)-1])
+	}
+
+	// the person agrees: a note, the stage and a task for the card's own manager
+	f.fake.Talk("g2", "agreed", f.now, "Alo?", ">Alo", greeting, ">Ha, besh", "Rahmat!")
+	f.tick()
+	log := portal.Log()
+	if len(log) != 3 || !strings.HasPrefix(log[0], "comment deal 7: Голосовой агент Gapi «Фидбэк после услуги»\nИтог: согласие") || log[1] != "move deal 7 WON" ||
+		log[2] != "todo 2 7 for 5: Клиент согласен: перезвонить и оформить" {
+		t.Fatalf("written to the portal: %q", log)
+	}
+
+	// the form, filled later, follows as a note of its own
+	calls := f.must("GET", "/api/calls?campaign_id="+campaign, nil)["calls"].([]any)
+	f.must("PUT", "/api/calls/"+calls[0].(map[string]any)["id"].(string)+"/form", map[string]any{"summary": "Оценка 5.",
+		"answers": map[string]any{"rating": map[string]any{"value": 5, "quote": "Ha, besh"}}})
+	f.tick()
+	if log = portal.Log(); len(log) != 4 || !strings.Contains(log[3], "ответы\nКратко: Оценка 5.\nОценка: 5") {
+		t.Fatalf("the form's note: %q", log)
+	}
+
+	// a card arrives at the stage: within a minute or two its person is called; nobody answers, and the card goes to the other stage
+	portal.Add(crmtest.Deal{ID: "10", Title: "Шкаф", Stage: "NEW", Contact: "71", Assigned: "6"})
+	f.now = f.now.Add(2 * time.Minute)
+	f.tick()
+	if placed = f.fake.Placed(); len(placed) != 3 || placed[2].To != "+998901110002" {
+		t.Fatalf("calls after a card arrived: %d", len(placed))
+	}
+	f.fake.Fail("g3", "no_answer", f.now)
+	f.tick()
+	if log = portal.Log(); len(log) != 6 || !strings.Contains(log[4], "comment deal 10") || !strings.Contains(log[4], "не ответил") || log[5] != "move deal 10 LOSE" {
+		t.Fatalf("a person not reached: %q", log)
+	}
+	// a campaign fed from a stage does not finish by itself
+	if c := f.must("GET", "/api/campaigns/"+campaign, nil)["campaign"].(map[string]any); c["status"] != "running" || c["crm_failed"] != 0.0 {
+		t.Fatalf("the campaign: %v", c)
 	}
 }

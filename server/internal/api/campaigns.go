@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/Islomov49/gapi-voice-studio/server/internal/compile"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/crm"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/dialer"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/model"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/phone"
@@ -39,18 +40,23 @@ type campaignView struct {
 	FinishedAt  *time.Time  `json:"finished_at"`
 	// People by where they stand: total, waiting, calling, talked, not reached, skipped.
 	Counts map[string]int `json:"counts"`
+	// What the campaign does in a CRM, if anything.
+	CRM *crm.Rules `json:"crm"`
+	// Calls whose result could not be written to the CRM.
+	CRMFailed int `json:"crm_failed"`
 }
 
 const campaignColumns = `c.id, c.name, c.agent_version_id, a.id, a.name, v.n, v.accepted_at is not null, c.list_id, l.name, c.line, c.rules, c.status, c.pause_reason,
 	c.portion, c.created_at, c.started_at, c.finished_at,
-	(select coalesce(jsonb_object_agg(status, n), '{}') from (select status, count(*) n from targets where campaign_id = c.id group by status) s)`
+	(select coalesce(jsonb_object_agg(status, n), '{}') from (select status, count(*) n from targets where campaign_id = c.id group by status) s),
+	c.crm, (select count(*) from calls where campaign_id = c.id and crm_state = 'failed')`
 
 const campaignJoins = ` from campaigns c join agent_versions v on v.id = c.agent_version_id join agents a on a.id = v.agent_id left join contact_lists l on l.id = c.list_id `
 
 func scanCampaign(row pgx.Row) (campaignView, error) {
 	c := campaignView{}
 	err := row.Scan(&c.ID, &c.Name, &c.VersionID, &c.AgentID, &c.AgentName, &c.VersionN, &c.Accepted, &c.ListID, &c.ListName, &c.Line, &c.Rules, &c.Status, &c.PauseReason,
-		&c.Portion, &c.CreatedAt, &c.StartedAt, &c.FinishedAt, &c.Counts)
+		&c.Portion, &c.CreatedAt, &c.StartedAt, &c.FinishedAt, &c.Counts, &c.CRM, &c.CRMFailed)
 	return c, err
 }
 
@@ -110,8 +116,12 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request, ws *Work
 		ListID    string       `json:"list_id"`
 		Line      string       `json:"line"`
 		Rules     *model.Rules `json:"rules"`
+		CRM       *crm.Rules   `json:"crm"`
 	}
 	if err := readJSON(r, &req); err != nil {
+		return err
+	}
+	if err := s.checkCRMRules(r.Context(), ws, req.CRM); err != nil {
 		return err
 	}
 	name := strings.TrimSpace(req.Name)
@@ -129,9 +139,14 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request, ws *Work
 	if err != nil {
 		return err
 	}
-	var listOK bool
-	if err := s.DB.QueryRow(r.Context(), `select exists (select 1 from contact_lists where id = $1 and workspace_id = $2 and archived_at is null)`, req.ListID, ws.ID).Scan(&listOK); err != nil || !listOK {
-		return notFound("list")
+	// a campaign fed from a CRM stage may start with no list: its people arrive as cards do
+	var list *string
+	if req.ListID != "" || req.CRM == nil || req.CRM.Feed == nil {
+		var listOK bool
+		if err := s.DB.QueryRow(r.Context(), `select exists (select 1 from contact_lists where id::text = $1 and workspace_id = $2 and archived_at is null)`, req.ListID, ws.ID).Scan(&listOK); err != nil || !listOK {
+			return notFound("list")
+		}
+		list = &req.ListID
 	}
 	tx, err := s.DB.Begin(r.Context())
 	if err != nil {
@@ -139,16 +154,16 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request, ws *Work
 	}
 	defer tx.Rollback(r.Context())
 	var id string
-	if err := tx.QueryRow(r.Context(), `insert into campaigns (workspace_id, name, agent_version_id, list_id, line, rules) values ($1, $2, $3, $4, $5, $6) returning id`,
-		ws.ID, name, v.ID, req.ListID, strings.TrimSpace(req.Line), r2).Scan(&id); err != nil {
+	if err := tx.QueryRow(r.Context(), `insert into campaigns (workspace_id, name, agent_version_id, list_id, line, rules, crm) values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+		ws.ID, name, v.ID, list, strings.TrimSpace(req.Line), r2, req.CRM).Scan(&id); err != nil {
 		return err
 	}
 	// numbers already on the stop list are in the campaign as skipped, so the
 	// results table accounts for every row of the list
-	if _, err := tx.Exec(r.Context(), `insert into targets (campaign_id, contact_id, row_no, phone, vars, status, result)
-		select $1, k.id, k.row_no, k.phone, k.data,
+	if _, err := tx.Exec(r.Context(), `insert into targets (campaign_id, contact_id, row_no, phone, vars, ref, status, result)
+		select $1, k.id, k.row_no, k.phone, k.data, k.ref,
 			case when st.phone is null then 'pending' else 'skipped' end, case when st.phone is null then '' else 'stop_list' end
-		from contacts k left join stoplist st on st.workspace_id = $2 and st.phone = k.phone where k.list_id = $3`, id, ws.ID, req.ListID); err != nil {
+		from contacts k left join stoplist st on st.workspace_id = $2 and st.phone = k.phone where k.list_id = $3`, id, ws.ID, list); err != nil {
 		return err
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -170,6 +185,8 @@ func (s *Server) updateCampaign(w http.ResponseWriter, r *http.Request, ws *Work
 		Rules     *model.Rules `json:"rules"`
 		Line      *string      `json:"line"`
 		VersionID *string      `json:"version_id"`
+		// {"crm": null} takes the CRM rules off.
+		CRM json.RawMessage `json:"crm"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		return err
@@ -202,7 +219,20 @@ func (s *Server) updateCampaign(w http.ResponseWriter, r *http.Request, ws *Work
 		}
 		c.VersionID = v.ID
 	}
-	if _, err := s.DB.Exec(r.Context(), `update campaigns set name = $2, rules = $3, line = $4, agent_version_id = $5 where id = $1`, c.ID, c.Name, c.Rules, c.Line, c.VersionID); err != nil {
+	if len(req.CRM) > 0 {
+		c.CRM = nil
+		if string(req.CRM) != "null" {
+			c.CRM = &crm.Rules{}
+			if err := json.Unmarshal(req.CRM, c.CRM); err != nil {
+				return bad("crm_invalid", "crm is the campaign's CRM rules")
+			}
+			if err := s.checkCRMRules(r.Context(), ws, c.CRM); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := s.DB.Exec(r.Context(), `update campaigns set name = $2, rules = $3, line = $4, agent_version_id = $5, crm = $6 where id = $1`,
+		c.ID, c.Name, c.Rules, c.Line, c.VersionID, c.CRM); err != nil {
 		return err
 	}
 	if c, err = s.campaign(r.Context(), ws, c.ID); err != nil {
@@ -301,14 +331,16 @@ type targetView struct {
 	Seconds  *float64        `json:"duration_seconds"`
 	Summary  *string         `json:"summary"`
 	Answers  json.RawMessage `json:"answers"`
+	// The person's card in a CRM, or the id an assistant gave with the row.
+	Ref string `json:"ref,omitempty"`
 }
 
-const targetQuery = `select t.id, t.row_no, t.phone, t.vars, t.portion, t.status, t.attempts, t.next_at, t.result, t.last_call_id, k.duration_seconds, k.summary, k.answers
+const targetQuery = `select t.id, t.row_no, t.phone, t.vars, t.portion, t.status, t.attempts, t.next_at, t.result, t.last_call_id, k.duration_seconds, k.summary, k.answers, t.ref
 	from targets t left join calls k on k.id = t.last_call_id where t.campaign_id = $1 `
 
 func scanTarget(row pgx.CollectableRow) (targetView, error) {
 	t := targetView{}
-	return t, row.Scan(&t.ID, &t.Row, &t.Phone, &t.Vars, &t.Portion, &t.Status, &t.Attempts, &t.NextAt, &t.Result, &t.CallID, &t.Seconds, &t.Summary, &t.Answers)
+	return t, row.Scan(&t.ID, &t.Row, &t.Phone, &t.Vars, &t.Portion, &t.Status, &t.Attempts, &t.NextAt, &t.Result, &t.CallID, &t.Seconds, &t.Summary, &t.Answers, &t.Ref)
 }
 
 // listTargets: GET /api/campaigns/{id}/targets?status=&offset=&numbers=1: the

@@ -54,6 +54,28 @@ A campaign that pauses itself says why in `pause_reason`:
 Resuming a campaign that stopped itself (`start_campaign` again) tells it a person has looked at the reason.
 Resume only after the person has.
 
+## People from a CRM
+
+The Studio connects to Bitrix24 and amoCRM by itself. It asks the CRM (every minute, for a campaign that follows
+a stage), so it needs no public address, no tunnel and no webhook from the CRM's side.
+
+- **Connecting** takes a secret (Bitrix24: an inbound webhook's address with the right "CRM"; amoCRM: an
+  integration's long-lived token). The person enters it in the interface, page "CRM". Do not ask for it in the
+  chat and do not put it into a tool call.
+- `crm_connections`, then `crm_pipelines` for the stages' ids, then `crm_import_stage`: the cards standing at a
+  stage become a list, each person remembering their card.
+- `create_campaign` with `crm`: `note` writes a comment onto the card when the person's calls are over (the
+  result, the attempts, the summary; the form follows when you fill it), `move` puts the card on a stage by
+  result, `task` sets a to-do for the card's own manager, `feed` keeps adding the cards that arrive at a stage
+  while the campaign runs. Agree the stages and the task's words with the person before you set them: they
+  change the business's own pipeline.
+- `get_campaign` shows `crm_failed`: calls whose result the CRM did not take. Say so; do not retry by hand.
+
+Any other system (another CRM, a spreadsheet service, an MCP server of the business's own) works through you:
+read the people there with that system's tools, give them to the Studio with `import_contact_rows` (each row with
+`ref`, that system's id of the person), and after the campaign read `campaign_results`, where every row carries
+its `ref`, and write the outcomes back with that system's tools.
+
 ## Writing the script
 
 The script is the whole of what the agent knows. Gapi's own guide is the reference:
@@ -108,6 +130,6 @@ a stage of the script already asks. After a call, fill the form from the call's 
 ## Changing the Studio itself
 
 `server/` is the Go service (`internal/api` the endpoints and the MCP tools, `internal/dialer` the calls,
-`internal/rules` and `internal/compile` the rules and the script building), `web/` the React interface;
+`internal/rules` and `internal/compile` the rules and the script building, `internal/crm` the two CRMs), `web/` the React interface;
 `docs/ARCHITECTURE.md` says how they fit. Tests: `STUDIO_TEST_DATABASE_URL=postgres://... go test ./...` in
 `server/` (they drop and recreate that database's schema), `npm run build` in `web/`.

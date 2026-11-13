@@ -129,7 +129,12 @@ type Contact struct {
 	Row   int
 	Phone string
 	Data  map[string]string
+	// The card in a CRM the person stands for, if any.
+	Ref string
 }
+
+// Column makes the column of a key and a title, for lists that do not come from a sheet.
+func NewColumn(key, title string) Column { return Column{Key: key, Title: title} }
 
 // Stats is what an upload found.
 type Stats struct {
