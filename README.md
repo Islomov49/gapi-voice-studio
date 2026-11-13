@@ -45,7 +45,7 @@ Whoever asks, the interface or an assistant, the service checks these before eac
   (the line fails, people ask not to be called, the agent does not introduce itself).
 
 The Studio is a convenience, not a gate: the calls are your Gapi project's, paid from its balance, and what
-Gapi itself allows your project is decided there.
+Gapi itself allows your project is decided there (Gapi, too, lets a project place three phone calls at once).
 
 ## Keep it local
 
