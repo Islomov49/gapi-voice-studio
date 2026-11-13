@@ -1,0 +1,39 @@
+# The Studio on your own machine:
+#
+#   GAPI_TOKEN=gapi_... docker compose up -d      then open http://localhost:8090
+#
+# GAPI_TOKEN is your Gapi project's API token (Gapi cabinet, page "Tokens"). Without it the Studio
+# asks for the token in the browser, and an assistant sends it to /mcp as a bearer token.
+# The Studio listens on this machine only: it places calls on your project's balance, so do not
+# put it on a network without a login of your own in front of it.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: studio
+      POSTGRES_PASSWORD: studio
+      POSTGRES_DB: studio
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studio"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  studio:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      STUDIO_DATABASE_URL: postgres://studio:studio@db:5432/studio
+      STUDIO_GAPI_TOKEN: ${GAPI_TOKEN:-}
+      STUDIO_GAPI_URL: ${GAPI_URL:-https://console.gapi.uz}
+    volumes:
+      - data:/data
+    ports:
+      - "127.0.0.1:${STUDIO_PORT:-8090}:8090"
+    restart: unless-stopped
+volumes:
+  db:
+  data:

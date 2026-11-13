@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/ru.ts","./src/pages/Agent.tsx","./src/pages/Agents.tsx","./src/pages/Call.tsx","./src/pages/Campaign.tsx","./src/pages/Campaigns.tsx","./src/pages/Home.tsx","./src/pages/Lists.tsx","./src/pages/StopList.tsx","./vite.config.ts"],"errors":true,"version":"6.0.3"}
