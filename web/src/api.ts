@@ -95,7 +95,7 @@ export type Call = {
   outcome: string
   duration_seconds: number | null
   charged_g: number | null
-  checks: { ai_disclosed?: boolean; do_not_call?: boolean; callback?: boolean; callback_at?: string }
+  checks: { ai_disclosed?: boolean; past_opening?: boolean; do_not_call?: boolean; callback?: boolean; callback_at?: string }
   analysis: string
   analysis_error: string
   doubts: string[]

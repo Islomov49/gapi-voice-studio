@@ -123,8 +123,12 @@ export default function CallPage() {
           {call.settled && talked && (
             <div className="card">
               <h2>Проверки</h2>
-              <div className={`note ${call.checks.ai_disclosed ? 'good' : 'bad'}`}>
-                {call.checks.ai_disclosed ? 'Агент в первых словах назвал себя голосовым ассистентом.' : 'Агент не назвал себя голосовым ассистентом в первых словах.'}
+              <div className={`note ${call.checks.ai_disclosed ? 'good' : call.checks.past_opening === false ? '' : 'bad'}`}>
+                {call.checks.ai_disclosed
+                  ? 'Агент в начале разговора сказал, что он ИИ-ассистент.'
+                  : call.checks.past_opening === false
+                    ? 'Разговор закончился раньше того места сценария, где агент говорит, что он ИИ-ассистент.'
+                    : 'Агент не сказал в начале разговора, что он ИИ-ассистент.'}
               </div>
               {call.summary && <div className="note">{call.summary}</div>}
               {call.checks.do_not_call && <div className="note warn">Абонент попросил больше не звонить: номер добавлен в стоп-лист.</div>}

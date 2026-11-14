@@ -94,7 +94,10 @@ https://console.gapi.uz/docs/en/agents.html#prompt. What matters most:
   they compare with" works; "handle objections persuasively" does not.
 - The exact phrase matters? Put it in quotes.
 - Keep `{{studio_greeting}}` in the first stage. The Studio puts the agent's first words there: the company's
-  name and that an AI assistant is calling. Do not write a human name or role for the agent.
+  name and that an AI assistant is calling. If the person wants a softer start (a name for the agent, a
+  question first), leave the placeholder out and write the words "sun'iy intellekt yordamchisi" into the
+  opening yourself, before the call's questions begin: the Studio checks that the agent said them within its
+  first six lines. Never write a script in which the agent passes for a person or denies being an AI.
 - What is not in the script the agent does not know; say what to answer then ("we will find out and tell you").
 - Replies are heard, not read: one or two short sentences and one question at a time.
 - Values that differ per person are variables: `{{client_name}}`, `{{order}}`. A list's columns fill them by

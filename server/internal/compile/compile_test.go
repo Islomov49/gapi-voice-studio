@@ -88,15 +88,27 @@ func TestCheck(t *testing.T) {
 
 func TestDisclosed(t *testing.T) {
 	turn := func(role, text string) gapi.Turn { return gapi.Turn{Role: role, Text: text} }
-	if !Disclosed([]gapi.Turn{turn("agent", "Alo?"), turn("caller", "Alo"), turn("agent", "Assalomu alaykum! Men «Olma» kompaniyasining sunʼiy intellekt yordamchisiman.")}) {
-		t.Error("the greeting with another apostrophe should count")
+	greeting := model.Spec{Script: "1. {{studio_greeting}}"}
+	own := model.Spec{Script: "1. «Men Malikaman.»\n3. «Men kompaniyaning sun'iy intellekt yordamchisiman. Boshlaymizmi?»"}
+	check := func(name string, spec model.Spec, wantSaid, wantDue bool, turns ...gapi.Turn) {
+		if said, due := Disclosed(spec, turns); said != wantSaid || due != wantDue {
+			t.Errorf("%s: said %v, due %v", name, said, due)
+		}
 	}
-	if Disclosed([]gapi.Turn{turn("agent", "Alo?"), turn("agent", "Assalomu alaykum, men Malikaman."), turn("agent", "Bir daqiqa vaqtingiz bormi?"), turn("agent", "Men sun'iy intellekt yordamchisiman.")}) {
-		t.Error("said only in the fourth line is too late")
+	named := []gapi.Turn{turn("agent", "Alo?"), turn("agent", "Assalomu alaykum, men Malikaman."), turn("agent", "Bir daqiqa vaqtingiz bormi?"),
+		turn("agent", "Men kompaniyaning sun'iy intellekt yordamchisiman. Boshlaymizmi?")}
+	check("the Studio's greeting", greeting, true, true, turn("agent", "Alo?"), turn("caller", "Alo"), turn("agent", "Assalomu alaykum! Men «Olma» kompaniyasining sunʼiy intellekt yordamchisiman."))
+	check("the greeting's script, a name first", greeting, false, true, named...)
+	check("its own opening, a name first", own, true, false, named...)
+	check("its own opening, the person left early", own, false, false, named[:3]...)
+	check("a question about AI is not the words", own, false, false, turn("agent", "Alo?"), turn("agent", "Men Malikaman."), turn("agent", "Sun'iy intellekt haqidagi statistika sizga qiziqmi?"))
+	check("the person's words do not count", greeting, false, true, turn("caller", "siz sun'iy intellekt yordamchisimisiz?"), turn("agent", "Yo'q."))
+	late := []gapi.Turn{turn("agent", "Alo?")}
+	for i := 0; i < 6; i++ {
+		late = append(late, turn("agent", "Savol."), turn("agent", ""))
 	}
-	if Disclosed([]gapi.Turn{turn("caller", "siz sun'iy intellektmisiz?"), turn("agent", "Yo'q.")}) {
-		t.Error("the person's own words do not count")
-	}
+	late = append(late, turn("agent", "Men sun'iy intellekt yordamchisiman."))
+	check("its own opening, said too late", own, false, true, late...)
 }
 
 func TestPhonesAndKeys(t *testing.T) {
@@ -181,5 +193,22 @@ func TestConditionalLines(t *testing.T) {
 	spec.Script = "Salom. {{if segment=client}} rahmat"
 	if p := Check(spec, DefaultLimits); len(p) == 0 {
 		t.Error("a condition in the middle of a line was accepted")
+	}
+}
+
+// A script may say in its own opening that an AI assistant is calling; then
+// the Studio does not force its greeting into the first sentence.
+func TestOwnDisclosure(t *testing.T) {
+	own := model.Spec{Company: "Olma", Script: "1. «Assalomu alaykum! Men Malikaman.»\n2. «Men kompaniyaning sunʼiy intellekt yordamchisiman. Boshlaymizmi?»"}
+	agent, err := Build("a", own, DefaultLimits, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(agent.Prompt, "birinchi gapingiz aynan shunday") || !strings.Contains(agent.Prompt, "har doim rostini ayting") {
+		t.Errorf("a script with its own disclosure: %s", agent.Prompt)
+	}
+	none := model.Spec{Company: "Olma", Script: "1. «Assalomu alaykum! Men Malikaman.»"}
+	if agent, _ := Build("a", none, DefaultLimits, nil); !strings.Contains(agent.Prompt, "birinchi gapingiz aynan shunday") {
+		t.Error("a script that never says what the agent is did not get the greeting")
 	}
 }

@@ -215,7 +215,7 @@ func (s *Server) verdict(w http.ResponseWriter, r *http.Request, ws *Workspace) 
 		case !settled || status != "ended":
 			return conflict("call_not_answered", "only a test call that was answered and has ended can be accepted")
 		case checks["ai_disclosed"] != true:
-			return conflict("agent_did_not_introduce_itself", "in this call the agent did not say it is an AI assistant in its first words; correct the script and call again")
+			return conflict("agent_did_not_introduce_itself", "in this call the agent did not say it is an AI assistant in the opening of the call; correct the script and call again")
 		}
 	}
 	if _, err := tx.Exec(r.Context(), `update calls set accepted = $2, feedback = $3 where id = $1`, r.PathValue("id"), req.Accepted, feedback); err != nil {

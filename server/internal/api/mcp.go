@@ -63,7 +63,7 @@ func pick(a map[string]any, keys ...string) map[string]any {
 }
 
 const specDoc = `The agent's description: {"company": the business's name as said aloud, "script": the instruction in the callers' language with {{variable}} places ` +
-	`(put {{studio_greeting}} where the agent says its first words), "voice": "charos" or "sarvar", "variables": {name: default}, "vocabulary": [names the recogniser must hear right], ` +
+	`(put {{studio_greeting}} where the agent says its first words, or have the agent say \"sun'iy intellekt yordamchisi\" of itself elsewhere in the opening), "voice": "charos" or "sarvar", "variables": {name: default}, "vocabulary": [names the recogniser must hear right], ` +
 	`"max_call_seconds": 30-1800, "form": [{"key", "title", "type": text|number|choice|rating|yesno|datetime, "options": [for choice], "ask": how the agent asks, "required"}]}`
 
 var mcpTools = []mcpTool{

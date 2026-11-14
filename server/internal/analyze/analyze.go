@@ -14,8 +14,10 @@ import (
 )
 
 type Result struct {
-	// The agent's first words named it an AI assistant.
-	Disclosed bool
+	// The agent said in the call's opening that it is an AI assistant; and
+	// whether the call went on past its opening.
+	Disclosed   bool
+	PastOpening bool
 	// The person asked not to be called again.
 	DoNotCall bool
 	// The agent ended the call by promising to call again, and the moment it
@@ -43,8 +45,9 @@ var stopPhrases = []string{
 	"не звоните", "не звони", "больше не звон", "не надо звонить", "удалите мой номер", "удалите номер", "не беспокойте",
 }
 
-func (Baseline) Analyze(_ context.Context, _ model.Spec, t *gapi.Transcript, now time.Time) (*Result, error) {
-	res := &Result{Disclosed: compile.Disclosed(t.Turns), Answers: map[string]model.Answer{}}
+func (Baseline) Analyze(_ context.Context, spec model.Spec, t *gapi.Transcript, now time.Time) (*Result, error) {
+	res := &Result{Answers: map[string]model.Answer{}}
+	res.Disclosed, res.PastOpening = compile.Disclosed(spec, t.Turns)
 	res.Callback, res.CallbackAt = Callback(t.Turns, now)
 	for _, turn := range t.Turns {
 		if turn.Role != "caller" {

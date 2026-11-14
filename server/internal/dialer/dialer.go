@@ -263,7 +263,7 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 			}
 		}
 		analysisError = failure
-		checks["ai_disclosed"], checks["do_not_call"] = res.Disclosed, res.DoNotCall
+		checks["ai_disclosed"], checks["do_not_call"], checks["past_opening"] = res.Disclosed, res.DoNotCall, res.PastOpening
 		if res.Callback || res.CallbackAt != nil {
 			checks["callback"] = true
 			if res.CallbackAt != nil {
@@ -394,7 +394,7 @@ func (e *Engine) advance(ctx context.Context, _ map[string]string) error {
 					count(*) filter (where k.status = 'failed' and k.end_reason not in ('busy', 'no_answer', 'declined', 'wrong_number')),
 					count(*) filter (where k.status = 'ended'),
 					count(*) filter (where k.checks->>'do_not_call' = 'true'),
-					count(*) filter (where k.status = 'ended' and k.checks->>'ai_disclosed' = 'false')
+					count(*) filter (where k.status = 'ended' and k.checks->>'ai_disclosed' = 'false' and coalesce(k.checks->>'past_opening', 'true') = 'true')
 				from calls k join targets t on t.id = k.target_id where t.campaign_id = $1 and t.portion = $2`, c.id, c.portion).
 				Scan(&p.Calls, &p.Technical, &p.Talked, &p.DoNotCall, &p.Undisclosed); err != nil {
 				return err

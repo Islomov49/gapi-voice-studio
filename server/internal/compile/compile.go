@@ -18,8 +18,10 @@ import (
 
 // GreetingPlace is where a script puts the agent's first words. A script
 // written from a Studio template has it inside its first stage, which is
-// where the model keeps a rule best; a script without it gets the words as a
-// rule of its own at the end.
+// where the model keeps a rule best. A script may instead say in its own
+// words, somewhere in its opening, that an AI assistant is calling (the words
+// "sun'iy intellekt yordamchisi"); a script with neither gets the greeting as
+// a rule of its own at the end.
 const GreetingPlace = "{{studio_greeting}}"
 
 // Greeting is the agent's first sentence on every call: the company, and that
@@ -259,9 +261,13 @@ func instruction(s model.Spec, values map[string]string, all bool) string {
 	greeting := "«" + Greeting(s.Company) + "»"
 	script := strings.TrimSpace(conditional(s.Script, values, all))
 	var rules []string
-	if strings.Contains(script, GreetingPlace) {
+	switch {
+	case strings.Contains(script, GreetingPlace):
 		script = strings.ReplaceAll(script, GreetingPlace, greeting)
-	} else {
+	case ownDisclosure(s):
+		// the script says in its own opening that an AI assistant is calling
+		rules = append(rules, "Suhbat boshida, asosiy savollarga o'tishdan oldin, o'zingizni kompaniyaning sun'iy intellekt yordamchisi deb ayting. Robotmisiz yoki odammisiz deb so'rasa, har doim rostini ayting: siz sun'iy intellekt yordamchisisiz.")
+	default:
 		rules = append(rules, "Mijoz javob bergach, birinchi gapingiz aynan shunday bo'lsin: "+greeting+" Shundan keyin nima uchun qo'ng'iroq qilayotganingizni bir jumlada ayting.")
 	}
 	rules = append(rules, "Mijoz «boshqa qo'ng'iroq qilmang» yoki «raqamimni o'chiring» desa: bir marta uzr so'rang va darrov xayrlashing, boshqa hech narsa taklif qilmang.")
@@ -333,20 +339,41 @@ func Values(s model.Spec, data map[string]string) (map[string]string, error) {
 
 var apostrophes = strings.NewReplacer("ʻ", "'", "‘", "'", "’", "'", "`", "'", "ʼ", "'")
 
-// Disclosed reports whether the agent said it is an AI assistant in its first
-// words: one of its first three lines holds the phrase of Greeting.
-func Disclosed(turns []gapi.Turn) bool {
+// The words by which the agent says what it is. A script that holds them has
+// chosen where in the opening they are said; the Studio's own greeting holds
+// them too.
+const disclosure = "sun'iy intellekt yordamchisi"
+
+// OpeningLines is how many of the agent's lines, the platform's "Alo?"
+// among them, make the opening of a call when the script says in its own
+// place that an AI assistant is calling; with the Studio's greeting it is
+// three, the agent's first words.
+const OpeningLines = 6
+
+// ownDisclosure: the script chose where in its opening the agent says what
+// it is, instead of taking the Studio's greeting as its first sentence.
+func ownDisclosure(s model.Spec) bool {
+	return !strings.Contains(s.Script, GreetingPlace) && strings.Contains(strings.ToLower(apostrophes.Replace(s.Script)), disclosure)
+}
+
+// Disclosed reports whether the agent said it is an AI assistant where the
+// version's script has it: in its first words, or within its opening. due is
+// whether the call got far enough for that to be owed: with a script's own
+// opening, a person who hung up after two lines was not kept from knowing.
+func Disclosed(s model.Spec, turns []gapi.Turn) (said, due bool) {
+	opening := 3
+	if ownDisclosure(s) {
+		opening = OpeningLines
+	}
 	seen := 0
 	for _, t := range turns {
-		if t.Role != "agent" {
+		if t.Role != "agent" || strings.TrimSpace(t.Text) == "" {
 			continue
 		}
-		if strings.Contains(strings.ToLower(apostrophes.Replace(t.Text)), "sun'iy intellekt") {
-			return true
-		}
-		if seen++; seen == 3 {
-			break
+		seen++
+		if seen <= opening && strings.Contains(strings.ToLower(apostrophes.Replace(t.Text)), disclosure) {
+			said = true
 		}
 	}
-	return false
+	return said, opening == 3 || seen > opening
 }

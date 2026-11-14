@@ -55,8 +55,9 @@ Whoever asks, the interface or an assistant, the service checks these before eac
 
 - A campaign starts only with an agent version whose test call a person accepted. A change of the script is
   a new version and needs its own test call.
-- The agent opens every call by naming the company and saying that an AI assistant is calling; each call's
-  text is checked for it.
+- The agent says that an AI assistant is calling: in its first sentence with the Studio's greeting, or, when a
+  script places the words itself, in the opening of the call before its questions; asked whether it is a
+  robot, it always says so. Each call's text is checked for it.
 - Calls are placed only inside the campaign's hours, Tashkent time, and never outside 08:00-21:00.
 - Three calls at once per project, test calls included.
 - The stop list: checked at upload and before each dial; a person's "do not call me" adds the number; only
