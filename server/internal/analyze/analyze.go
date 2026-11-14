@@ -42,18 +42,30 @@ var apostrophes = strings.NewReplacer("ʻ", "'", "‘", "'", "’", "'", "`", "'
 var stopPhrases = []string{
 	"qo'ng'iroq qilmang", "qo'ng'iroq qilmanglar", "telefon qilmang", "telefon qilmanglar", "boshqa qo'ng'iroq qilma",
 	"raqamimni o'chir", "nomerimni o'chir", "bezovta qilmang", "bezovta qilmanglar",
+	"boshqa qilmang", "boshqa telefon qilma", "qayta qo'ng'iroq qilmang",
 	"не звоните", "не звони", "больше не звон", "не надо звонить", "удалите мой номер", "удалите номер", "не беспокойте",
 }
+
+// What the agent says when it has taken such a request: its own words are
+// exact, the person's went through a recogniser.
+var stopPromises = []string{"raqamingizni o'chir", "boshqa qo'ng'iroq qilmaymiz", "boshqa bezovta qilmaymiz", "qayta qo'ng'iroq qilmaymiz"}
 
 func (Baseline) Analyze(_ context.Context, spec model.Spec, t *gapi.Transcript, now time.Time) (*Result, error) {
 	res := &Result{Answers: map[string]model.Answer{}}
 	res.Disclosed, res.PastOpening = compile.Disclosed(spec, t.Turns)
 	res.Callback, res.CallbackAt = Callback(t.Turns, now)
 	for _, turn := range t.Turns {
+		text := strings.ToLower(apostrophes.Replace(turn.Text))
+		if turn.Role == "agent" {
+			for _, p := range stopPromises {
+				if strings.Contains(text, p) {
+					res.DoNotCall = true
+				}
+			}
+		}
 		if turn.Role != "caller" {
 			continue
 		}
-		text := strings.ToLower(apostrophes.Replace(turn.Text))
 		for _, p := range stopPhrases {
 			if strings.Contains(text, p) {
 				res.DoNotCall = true

@@ -303,7 +303,8 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 	if err != nil {
 		return err
 	}
-	if res.DoNotCall {
+	// a test call does not put the tester's own number on the stop list
+	if res.DoNotCall && c.kind != "test" {
 		if _, err := tx.Exec(ctx, `insert into stoplist (workspace_id, phone, reason, source, call_id, created_at) values ($1, $2, 'asked not to be called', 'call', $3, $4)
 			on conflict do nothing`, c.workspaceID, number, c.id, now); err != nil {
 			return err
