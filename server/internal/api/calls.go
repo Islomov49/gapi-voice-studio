@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Islomov49/gapi-voice-studio/server/internal/analyze"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/compile"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/dialer"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/model"
@@ -73,6 +74,8 @@ type callView struct {
 	ChargedG        *float64        `json:"charged_g"`
 	Checks          json.RawMessage `json:"checks"`
 	Analysis        string          `json:"analysis"`
+	AnalysisError   string          `json:"analysis_error"`
+	Doubts          json.RawMessage `json:"doubts"`
 	Accepted        *bool           `json:"accepted"`
 	Feedback        string          `json:"feedback"`
 	Summary         string          `json:"summary"`
@@ -88,7 +91,7 @@ type callView struct {
 }
 
 const callColumns = `c.id, c.kind, c.campaign_id, c.target_id, c.agent_version_id, a.name, v.n, c.phone, c.status, c.end_reason, c.outcome, c.duration_seconds,
-	c.charged_g, c.checks, c.analysis, c.accepted, c.feedback, c.summary, c.created_at, c.started_at, c.ended_at, c.settled_at is not null,
+	c.charged_g, c.checks, c.analysis, c.analysis_error, c.doubts, c.accepted, c.feedback, c.summary, c.created_at, c.started_at, c.ended_at, c.settled_at is not null,
 	c.status = 'ended' and c.gapi_call_id <> ''`
 
 const callJoins = ` from calls c join agent_versions v on v.id = c.agent_version_id join agents a on a.id = v.agent_id `
@@ -96,7 +99,7 @@ const callJoins = ` from calls c join agent_versions v on v.id = c.agent_version
 func scanCall(row pgx.Row, more ...any) (callView, error) {
 	c := callView{}
 	dest := []any{&c.ID, &c.Kind, &c.CampaignID, &c.TargetID, &c.VersionID, &c.AgentName, &c.VersionN, &c.Phone, &c.Status, &c.EndReason, &c.Outcome, &c.DurationSeconds,
-		&c.ChargedG, &c.Checks, &c.Analysis, &c.Accepted, &c.Feedback, &c.Summary, &c.CreatedAt, &c.StartedAt, &c.EndedAt, &c.Settled, &c.HasRecording}
+		&c.ChargedG, &c.Checks, &c.Analysis, &c.AnalysisError, &c.Doubts, &c.Accepted, &c.Feedback, &c.Summary, &c.CreatedAt, &c.StartedAt, &c.EndedAt, &c.Settled, &c.HasRecording}
 	return c, row.Scan(append(dest, more...)...)
 }
 
@@ -312,7 +315,7 @@ func (s *Server) fillForm(w http.ResponseWriter, r *http.Request, ws *Workspace)
 	said := make([]string, 0, len(turns))
 	for _, t := range turns {
 		if t.Role == "caller" || t.Role == "agent" {
-			said = append(said, plain(t.Text))
+			said = append(said, analyze.Plain(t.Text))
 		}
 	}
 	fields := map[string]model.Field{}
@@ -331,19 +334,10 @@ func (s *Server) fillForm(w http.ResponseWriter, r *http.Request, ws *Workspace)
 			delete(answers, key)
 			continue
 		}
-		if err := fits(f, a.Value); err != nil {
+		if err := analyze.Fits(f, a.Value); err != nil {
 			return bad("answer_invalid", key+": "+err.Error())
 		}
-		quote := plain(a.Quote)
-		found := quote != ""
-		if found {
-			found = false
-			for _, line := range said {
-				if strings.Contains(line, quote) {
-					found = true
-				}
-			}
-		}
+		found := analyze.Quoted(said, a.Quote)
 		if !found {
 			return bad("quote_not_in_call", key+": give the words of the call the answer was taken from, exactly as they stand in its text")
 		}
@@ -363,50 +357,5 @@ func (s *Server) fillForm(w http.ResponseWriter, r *http.Request, ws *Workspace)
 		return err
 	}
 	writeJSON(w, 200, map[string]any{"answers": answers, "summary": summary})
-	return nil
-}
-
-var plainer = strings.NewReplacer("ʻ", "'", "‘", "'", "’", "'", "`", "'", "ʼ", "'", "«", "", "»", "", "\"", "", ",", "", ".", "", "!", "", "?", "")
-
-// plain brings words to the form two spellings of the same speech share.
-func plain(s string) string {
-	return strings.Join(strings.Fields(strings.ToLower(plainer.Replace(s))), " ")
-}
-
-// fits checks an answer's value against its field's type.
-func fits(f model.Field, v any) error {
-	switch f.Type {
-	case "rating":
-		if n, ok := v.(float64); !ok || n < 1 || n > 5 || n != float64(int(n)) {
-			return errors.New("a rating is a whole number from 1 to 5")
-		}
-	case "number":
-		if _, ok := v.(float64); !ok {
-			return errors.New("the value is a number")
-		}
-	case "yesno":
-		if _, ok := v.(bool); !ok {
-			return errors.New("the value is true or false")
-		}
-	case "choice":
-		text, _ := v.(string)
-		for _, o := range f.Options {
-			if o == text {
-				return nil
-			}
-		}
-		return errors.New("the value is one of: " + strings.Join(f.Options, ", "))
-	case "datetime":
-		text, _ := v.(string)
-		if _, err := time.Parse("2006-01-02T15:04", text); err != nil {
-			if _, err := time.Parse("2006-01-02", text); err != nil {
-				return errors.New("a date and time is written 2026-11-14T15:30, a date alone 2026-11-14")
-			}
-		}
-	default:
-		if text, ok := v.(string); !ok || len([]rune(text)) > 1000 {
-			return errors.New("the value is a text of at most 1,000 characters")
-		}
-	}
 	return nil
 }

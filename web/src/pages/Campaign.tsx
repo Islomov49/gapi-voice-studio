@@ -6,7 +6,8 @@ import { campaignStatus, pauseReason, result, say, seconds, targetStatus, when }
 import { RulesEditor } from './Campaigns'
 import CrmRulesCard from './CrmRulesCard'
 
-type Detail = { campaign: Campaign; results: Record<string, number>; calls: { placed: number; answered: number; seconds: number; charged_g: number } }
+type FieldStats = { key: string; title: string; type: string; answered: number; values?: { value: string; n: number }[]; average?: number }
+type Detail = { campaign: Campaign; results: Record<string, number>; form: FieldStats[]; calls: { placed: number; answered: number; seconds: number; charged_g: number } }
 
 export default function CampaignPage() {
   const { id } = useParams()
@@ -161,6 +162,41 @@ export default function CampaignPage() {
           </div>
         </details>
       </div>
+      {detail.form.some((f) => f.answered > 0) && (
+        <div className="card">
+          <h2>Ответы</h2>
+          <div className="scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Вопрос</th>
+                  <th>Ответили</th>
+                  <th>Что ответили</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.form.map((f) => (
+                  <tr key={f.key}>
+                    <td>{f.title}</td>
+                    <td className="num">{f.answered}</td>
+                    <td>
+                      {f.average != null && <span className="tag">в среднем {f.average.toFixed(1)}</span>}{' '}
+                      {(f.values ?? []).map((v) => (
+                        <span className="tag" key={v.value}>
+                          {v.value}: {v.n}
+                          {f.answered > 0 && <span className="muted"> · {Math.round((100 * v.n) / f.answered)}%</span>}
+                        </span>
+                      ))}
+                      {!f.values?.length && f.average == null && f.answered > 0 && <span className="muted small">текстовые ответы — в таблице ниже и в Excel</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="muted small" style={{ marginTop: 8 }}>По последнему звонку каждого человека. Форму заполняет Gemini (если добавлен ключ), ваш ассистент или вы сами на странице звонка.</div>
+        </div>
+      )}
       <CrmRulesCard campaign={c} editable={editable} onSaved={load} />
       <div className="card">
         <div className="spread" style={{ marginBottom: 10 }}>

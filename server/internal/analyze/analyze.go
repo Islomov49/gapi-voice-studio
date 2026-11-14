@@ -1,6 +1,6 @@
 // Package analyze reads a finished call's text without a language model: did
 // the agent introduce itself as an AI assistant, did the person ask not to be
-// called. The form's answers are filled by the person or their assistant.
+// called, did the agent promise to call again and when. The form's answers are filled by the person or their assistant.
 package analyze
 
 import (
@@ -18,7 +18,9 @@ type Result struct {
 	Disclosed bool
 	// The person asked not to be called again.
 	DoNotCall bool
-	// When the person asked to be called back, if they named a time.
+	// The agent ended the call by promising to call again, and the moment it
+	// named, if it named one.
+	Callback   bool
 	CallbackAt *time.Time
 	Answers    map[string]model.Answer
 	Summary    string
@@ -41,8 +43,9 @@ var stopPhrases = []string{
 	"не звоните", "не звони", "больше не звон", "не надо звонить", "удалите мой номер", "удалите номер", "не беспокойте",
 }
 
-func (Baseline) Analyze(_ context.Context, _ model.Spec, t *gapi.Transcript, _ time.Time) (*Result, error) {
+func (Baseline) Analyze(_ context.Context, _ model.Spec, t *gapi.Transcript, now time.Time) (*Result, error) {
 	res := &Result{Disclosed: compile.Disclosed(t.Turns), Answers: map[string]model.Answer{}}
+	res.Callback, res.CallbackAt = Callback(t.Turns, now)
 	for _, turn := range t.Turns {
 		if turn.Role != "caller" {
 			continue

@@ -14,11 +14,43 @@ export default function Home() {
   const [tester, setTester] = useState(me.workspace.tester_phone)
   const [saved, setSaved] = useState('')
   const [error, setError] = useState('')
+  const [ai, setAi] = useState<{ connected: boolean; model: string; default_model: string } | null>(null)
+  const [aiKey, setAiKey] = useState('')
+  const [aiModel, setAiModel] = useState('')
+  const [aiNote, setAiNote] = useState('')
+  const [aiError, setAiError] = useState('')
 
   useEffect(() => {
     api('GET', '/agents').then((d) => setAgents(d.agents))
     api('GET', '/campaigns').then((d) => setCampaigns(d.campaigns))
+    api('GET', '/ai').then((d) => {
+      setAi(d)
+      setAiModel(d.model === d.default_model ? '' : d.model)
+    })
   }, [])
+
+  async function saveAi(e: React.FormEvent) {
+    e.preventDefault()
+    setAiError('')
+    setAiNote('')
+    try {
+      const body: { key?: string; model: string } = { model: aiModel.trim() }
+      if (aiKey.trim()) body.key = aiKey.trim()
+      setAi(await api('PUT', '/ai', body))
+      setAiKey('')
+      setAiNote('Ключ проверен и сохранён.')
+      await reload()
+    } catch (err) {
+      setAiError(say(err))
+    }
+  }
+  async function dropAi() {
+    setAiError('')
+    setAiNote('')
+    setAi(await api('DELETE', '/ai'))
+    setAiModel('')
+    await reload()
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -103,6 +135,45 @@ export default function Home() {
           </div>
         </div>
       </div>
+      <form className="card" onSubmit={saveAi}>
+        <div className="spread">
+          <h2 style={{ margin: 0 }}>Разбор звонков через Gemini</h2>
+          <span className={`tag ${ai?.connected ? 'good' : ''}`}>{ai?.connected ? 'ключ добавлен' : 'не обязательно'}</span>
+        </div>
+        <p className="muted small">
+          С вашим ключом Gemini API Studio после каждого состоявшегося разговора сама заполняет форму по тексту звонка, пишет короткий итог и отмечает, что стоит
+          перепроверить на слух. Ответ записывается только вместе со словами абонента, из которых он взят. Текст разговора при этом отправляется в Google; ключ
+          хранится на этом компьютере в зашифрованном виде. Без ключа форму заполняете вы или ваш ассистент.
+        </p>
+        <div className="grid cols-2">
+          <label>
+            Ключ Gemini API
+            <input
+              type="password"
+              autoComplete="off"
+              value={aiKey}
+              onChange={(e) => setAiKey(e.target.value)}
+              placeholder={ai?.connected ? 'ключ сохранён; вставьте новый, чтобы заменить' : 'из aistudio.google.com, раздел API keys'}
+            />
+          </label>
+          <label>
+            Модель
+            <input value={aiModel} onChange={(e) => setAiModel(e.target.value)} placeholder={ai?.default_model ?? ''} />
+          </label>
+        </div>
+        {aiError && <div className="note bad">{aiError}</div>}
+        <div className="row">
+          <button className="primary" disabled={!ai || (!ai.connected && aiKey.trim().length < 20)}>
+            {ai?.connected ? 'Сохранить' : 'Добавить ключ'}
+          </button>
+          {ai?.connected && (
+            <button type="button" onClick={dropAi}>
+              Удалить ключ
+            </button>
+          )}
+          <span className="muted small">{aiNote}</span>
+        </div>
+      </form>
       {campaigns.length > 0 && (
         <div className="card">
           <h2>Обзвоны</h2>

@@ -4,6 +4,11 @@ A local shell over [Gapi](https://console.gapi.uz)'s voice agents: describe a ta
 hear it on a test call, then let it call a list of people in portions and read the answers as a table.
 It runs on your own machine against your own Gapi project; nothing of yours is hosted anywhere else.
 
+The forms are filled from the calls' text by your assistant, by you, or by the Studio itself if you give it
+your own Gemini API key (page "Обзор"; optional). With a key each answered call's text is sent to Google's
+Gemini API, which fills the form, writes a summary and lists what to check by ear; an answer is kept only
+with the caller's words it was taken from. Without a key no call text leaves your machine.
+
 It has two ways in:
 
 - **A web interface** at http://localhost:8090 (Russian): agents and their versions, test calls with the
@@ -56,6 +61,8 @@ Whoever asks, the interface or an assistant, the service checks these before eac
 - Three calls at once per project, test calls included.
 - The stop list: checked at upload and before each dial; a person's "do not call me" adds the number; only
   a person removes one.
+- "Call me later": the agent asks when, repeats the time and hangs up; the Studio calls again at that time
+  (ten minutes, two hours, tomorrow at eleven), inside the calling hours.
 - Portions: 10 people, then 30 at a time. After a portion the campaign stops itself if the calls look wrong
   (the line fails, people ask not to be called, the agent does not introduce itself).
 

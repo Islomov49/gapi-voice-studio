@@ -41,6 +41,12 @@ The Studio enforces this order; working with it rather than around it saves refu
    form is empty; `get_call` and `fill_call_form` for each. Report in plain numbers: reached, outcomes, what
    people said, where the agent went wrong.
 
+**A person who asks to be called later** is called again by the Studio itself. The agent asks when, repeats the
+time ("... yarim soatdan keyin qayta qo'ng'iroq qilamiz") and ends the call; the Studio reads the time from the
+agent's words (`checks.callback`, `checks.callback_at` in `get_call`) and places the next call then, or at the first
+calling minute after it. No time named: after the pause between attempts. Such a call is placed even past the
+campaign's attempts, twice at most. The result `callback` is something else: a person a human should call.
+
 A campaign that pauses itself says why in `pause_reason`:
 
 | Reason | What it means | What to do |
@@ -117,6 +123,13 @@ a stage of the script already asks. After a call, fill the form from the call's 
   refuses an answer whose quote is not in the call.
 - A field nobody answered stays empty. Do not infer a rating from a tone.
 - `summary` is one or two sentences in the person's own language (the Studio's interface is Russian).
+
+If the person has added their Gemini key in the interface (`studio_status` says `"ai": true`), the Studio fills
+the form itself after every answered call, under the same two rules. Then your part is the calls it was not
+sure of: `get_call` shows `doubts` (what to check by ear) and `analysis` (`ai`, or `failed` with
+`analysis_error` when the model did not answer); correct with `fill_call_form`, or have it read a call again
+with `analyze_call`. The key is the person's to enter, on the page "Обзор": do not ask for it in the chat.
+`get_campaign` counts the answers per field in `form`.
 
 ## What you do not do
 

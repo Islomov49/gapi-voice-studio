@@ -13,7 +13,8 @@ export const result: Record<string, string> = {
   agent_left: 'Агент завершил',
   room_gone: 'Связь прервалась',
   declined: 'Отказ',
-  callback: 'Просил перезвонить',
+  callback: 'Нужен звонок человека',
+  call_later: 'Перезвоним по просьбе',
   lost_interest: 'Потерял интерес',
   time_up: 'Вышло время',
   caller_left: 'Положил трубку',
@@ -81,7 +82,23 @@ export const errors: Record<string, string> = {
   crm_in_use: 'В эту CRM пишет идущий обзвон. Сначала поставьте его на паузу.',
   crm_stage_empty: 'На этой стадии нет карточек с номером телефона.',
   crm_reconnect: 'Ключ подключения больше не читается. Подключите CRM заново.',
+  ai_key_invalid: 'Google не принял этот ключ Gemini.',
+  ai_key_missing: 'Вставьте ключ Gemini API.',
+  ai_unreachable: 'API Google не ответил. Попробуйте ещё раз.',
+  ai_not_connected: 'Ключ Gemini не добавлен: добавьте его на странице «Обзор».',
+  call_has_no_text: 'У этого звонка нет текста разговора.',
   internal: 'Что-то сломалось на сервере. Попробуйте ещё раз.',
+}
+
+// Why the model did not read a call (calls.analysis_error).
+export const aiError: Record<string, string> = {
+  authentication: 'Google не принял ключ',
+  model_not_found: 'у ключа нет такой модели',
+  rate_limit_exceeded: 'превышен лимит запросов Google',
+  quota_exceeded: 'исчерпана квота Google',
+  answer_not_json: 'модель ответила не по форме',
+  empty_answer: 'модель ничего не ответила',
+  unreachable: 'API Google не ответил',
 }
 
 export function say(e: unknown): string {

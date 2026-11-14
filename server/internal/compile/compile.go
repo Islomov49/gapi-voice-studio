@@ -175,6 +175,13 @@ func prompt(s model.Spec, values map[string]string) string {
 // Preview is the instruction with a contact's values filled in.
 func Preview(s model.Spec, values map[string]string) string { return prompt(s, values) }
 
+// CallbackRule has the agent settle a later call in words the Studio can read
+// back from the call's text (analyze.Callback): the time repeated in a plain
+// form, then "qayta qo'ng'iroq qilamiz", then goodbye.
+const CallbackRule = "Mijoz hozir gaplasha olmasligini aytsa yoki keyinroq qo'ng'iroq qilishni so'rasa: savollarni davom ettirmang, qachon qulayligini so'rang. " +
+	"Mijoz aytgan vaqtni o'z so'zlari bilan aniq takrorlang va «qayta qo'ng'iroq qilamiz» deng, masalan: «Xo'p, sizga yarim soatdan keyin qayta qo'ng'iroq qilamiz» yoki «Xo'p, sizga ertaga soat o'n birda qayta qo'ng'iroq qilamiz». " +
+	"Vaqt aytmasa: «Xo'p, sizga keyinroq qayta qo'ng'iroq qilamiz» deng. Shundan keyin xayrlashing va suhbatni tugating."
+
 // instruction is the script plus the Studio's own rules, variables not filled.
 func instruction(s model.Spec) string {
 	greeting := "«" + Greeting(s.Company) + "»"
@@ -186,6 +193,7 @@ func instruction(s model.Spec) string {
 		rules = append(rules, "Mijoz javob bergach, birinchi gapingiz aynan shunday bo'lsin: "+greeting+" Shundan keyin nima uchun qo'ng'iroq qilayotganingizni bir jumlada ayting.")
 	}
 	rules = append(rules, "Mijoz «boshqa qo'ng'iroq qilmang» yoki «raqamimni o'chiring» desa: bir marta uzr so'rang va darrov xayrlashing, boshqa hech narsa taklif qilmang.")
+	rules = append(rules, CallbackRule)
 	var asks []string
 	for _, f := range s.Form {
 		if ask := strings.TrimSpace(f.Ask); ask != "" {

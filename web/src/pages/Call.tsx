@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type Call } from '../api'
-import { usePoll } from '../App'
-import { callStatus, result, say, seconds, when } from '../ru'
+import { usePoll, useSession } from '../App'
+import { aiError, callStatus, result, say, seconds, when } from '../ru'
 
 const who: Record<string, string> = { agent: 'Агент', caller: 'Абонент' }
 
@@ -14,6 +14,8 @@ export default function CallPage() {
   const [feedback, setFeedback] = useState('')
   const [error, setError] = useState('')
   const [edits, setEdits] = useState<Record<string, string>>({})
+  const [reading, setReading] = useState(false)
+  const { me } = useSession()
 
   const load = useCallback(
     () =>
@@ -45,6 +47,19 @@ export default function CallPage() {
       await load()
     } catch (e) {
       setError(say(e))
+    }
+  }
+  async function readAgain() {
+    setError('')
+    setReading(true)
+    try {
+      setCall(await api<Call>('POST', `/calls/${id}/analyze`))
+      setEdits({})
+    } catch (e) {
+      setError(say(e))
+      await load()
+    } finally {
+      setReading(false)
     }
   }
   async function hangUp() {
@@ -111,7 +126,18 @@ export default function CallPage() {
               <div className={`note ${call.checks.ai_disclosed ? 'good' : 'bad'}`}>
                 {call.checks.ai_disclosed ? 'Агент в первых словах назвал себя голосовым ассистентом.' : 'Агент не назвал себя голосовым ассистентом в первых словах.'}
               </div>
+              {call.summary && <div className="note">{call.summary}</div>}
               {call.checks.do_not_call && <div className="note warn">Абонент попросил больше не звонить: номер добавлен в стоп-лист.</div>}
+              {call.checks.callback && (
+                <div className="note">
+                  Агент пообещал перезвонить{call.checks.callback_at ? `: ${when(call.checks.callback_at)}` : ', время не названо'}.{' '}
+                  {call.kind === 'test'
+                    ? 'В обзвоне Studio наберёт человека в это время сама; тестовый звонок не повторяется.'
+                    : call.checks.callback_at
+                      ? 'Studio наберёт человека в это время, если оно попадает в часы обзвона, иначе в ближайшие часы обзвона.'
+                      : 'Studio наберёт человека через паузу между попытками.'}
+                </div>
+              )}
             </div>
           )}
           {call.kind === 'test' && call.settled && (
@@ -142,8 +168,24 @@ export default function CallPage() {
           {form.length > 0 && call.settled && talked && (
             <div className="card">
               <h2>Форма</h2>
-              {Object.keys(answers).length === 0 && (
-                <div className="note small">Форму заполняет ваш ассистент через MCP (действие fill_call_form) или вы сами здесь.</div>
+              {call.analysis === 'ai' && <div className="note small">Заполнено Gemini по тексту разговора. Под каждым ответом слова абонента, из которых он взят.</div>}
+              {call.analysis === 'failed' && (
+                <div className="note warn small">Gemini не разобрал этот звонок: {aiError[call.analysis_error] ?? call.analysis_error}. Форма не заполнена.</div>
+              )}
+              {call.analysis !== 'ai' && Object.keys(answers).length === 0 && !me.ai && (
+                <div className="note small">
+                  Форму заполняет ваш ассистент через MCP (действие fill_call_form) или вы сами здесь. С ключом Gemini (страница «Обзор») Studio заполняет её сама.
+                </div>
+              )}
+              {(call.doubts ?? []).length > 0 && (
+                <div className="note warn small">
+                  Стоит перепроверить на слух:
+                  <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                    {call.doubts.map((d, i) => (
+                      <li key={i}>{d}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
               {form.map((f) => {
                 const a = answers[f.key]
@@ -155,9 +197,16 @@ export default function CallPage() {
                   </label>
                 )
               })}
-              <button disabled={Object.keys(edits).length === 0} onClick={saveAnswers}>
-                Сохранить ответы
-              </button>
+              <div className="row">
+                <button disabled={Object.keys(edits).length === 0} onClick={saveAnswers}>
+                  Сохранить ответы
+                </button>
+                {me.ai && (
+                  <button disabled={reading} onClick={readAgain} title="Gemini прочитает разговор заново; ответы, исправленные вручную, останутся">
+                    {reading ? 'Разбираю…' : 'Разобрать заново'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>

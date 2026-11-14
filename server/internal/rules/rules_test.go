@@ -73,16 +73,19 @@ func TestAfterCall(t *testing.T) {
 		result   string
 		next     time.Time
 	}{
-		"talked":                     {1, Ended{Status: "ended", Outcome: "agreed"}, "done", "agreed", time.Time{}},
-		"no answer, first":           {1, Ended{Status: "failed", EndReason: "no_answer"}, "pending", "no_answer", at(17, "09:00")}, // 21:30 is closed
-		"no answer, last":            {3, Ended{Status: "failed", EndReason: "no_answer"}, "failed", "no_answer", time.Time{}},
-		"declined once":              {1, Ended{Status: "failed", EndReason: "declined"}, "pending", "declined", at(17, "19:30")},
-		"declined twice":             {2, Ended{Status: "failed", EndReason: "declined"}, "failed", "declined", time.Time{}},
-		"wrong number":               {1, Ended{Status: "failed", EndReason: "wrong_number"}, "failed", "wrong_number", time.Time{}},
-		"provider refused":           {1, Ended{Status: "failed", EndReason: "provider_refused"}, "pending", "provider_refused", at(17, "09:00")},
-		"asked to call back at time": {1, Ended{Status: "ended", Outcome: "callback", CallbackAt: &callback}, "pending", "callback", callback},
-		"asked to call back":         {1, Ended{Status: "ended", Outcome: "callback"}, "pending", "callback", at(17, "09:00")},
-		"do not call":                {1, Ended{Status: "ended", Outcome: "callback", DoNotCall: true}, "done", "do_not_call", time.Time{}},
+		"talked":                          {1, Ended{Status: "ended", Outcome: "agreed"}, "done", "agreed", time.Time{}},
+		"no answer, first":                {1, Ended{Status: "failed", EndReason: "no_answer"}, "pending", "no_answer", at(17, "09:00")}, // 21:30 is closed
+		"no answer, last":                 {3, Ended{Status: "failed", EndReason: "no_answer"}, "failed", "no_answer", time.Time{}},
+		"declined once":                   {1, Ended{Status: "failed", EndReason: "declined"}, "pending", "declined", at(17, "19:30")},
+		"declined twice":                  {2, Ended{Status: "failed", EndReason: "declined"}, "failed", "declined", time.Time{}},
+		"wrong number":                    {1, Ended{Status: "failed", EndReason: "wrong_number"}, "failed", "wrong_number", time.Time{}},
+		"provider refused":                {1, Ended{Status: "failed", EndReason: "provider_refused"}, "pending", "provider_refused", at(17, "09:00")},
+		"the agent will call at a time":   {1, Ended{Status: "ended", Outcome: "callback", Callback: true, CallbackAt: &callback}, "pending", "call_later", callback},
+		"the agent will call, no time":    {1, Ended{Status: "ended", Callback: true}, "pending", "call_later", at(17, "09:00")},
+		"asked past the attempts":         {3, Ended{Status: "ended", Callback: true, CallbackAt: &callback}, "pending", "call_later", callback},
+		"asked too many times":            {5, Ended{Status: "ended", Callback: true, CallbackAt: &callback}, "done", "callback", time.Time{}},
+		"a manager will call, says model": {1, Ended{Status: "ended", Outcome: "callback"}, "done", "callback", time.Time{}},
+		"do not call":                     {1, Ended{Status: "ended", Outcome: "callback", Callback: true, DoNotCall: true}, "done", "do_not_call", time.Time{}},
 	} {
 		d := AfterCall(r, c.attempts, c.call, now)
 		if d.Status != c.status || d.Result != c.result || (c.status == "pending" && !d.NextAt.Equal(c.next)) {

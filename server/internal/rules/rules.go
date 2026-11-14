@@ -100,6 +100,10 @@ func NextOpen(r model.Rules, t time.Time) time.Time {
 	return t.Add(24 * time.Hour)
 }
 
+// ExtraCallbacks is how many calls beyond a campaign's attempts a person gets
+// by asking the agent to call later.
+const ExtraCallbacks = 2
+
 // Decision is what becomes of a person after one call.
 type Decision struct {
 	// pending (call again at NextAt), done (talked), failed (not reached)
@@ -116,9 +120,13 @@ type Ended struct {
 	// Gapi's status: "ended" (the phone was answered) or "failed".
 	Status    string
 	EndReason string
-	// The agent's own word on how the talk ended: agreed, declined, callback, ...
+	// The model's own word on how the talk ended: agreed, declined, callback, ...
+	// It is a label for the results table. "callback" there also covers "a
+	// manager will call you", so it does not by itself make the agent call again.
 	Outcome string
-	// When the person asked to be called back, if the call's text said so.
+	// The agent ended the call by promising to call again (analyze.Callback),
+	// and the moment it named, if it named one.
+	Callback   bool
 	CallbackAt *time.Time
 	// The person asked not to be called again.
 	DoNotCall bool
@@ -137,15 +145,17 @@ func AfterCall(r model.Rules, attempts int, c Ended, now time.Time) Decision {
 		return Decision{Status: "done", Result: "do_not_call"}
 	}
 	if c.Status == "ended" {
-		if c.Outcome == "callback" || c.CallbackAt != nil {
-			if attempts >= r.MaxAttempts {
+		if c.Callback || c.CallbackAt != nil {
+			// A call the person asked for is placed past the attempts' limit,
+			// ExtraCallbacks times at most; after that a person takes it over.
+			if attempts >= r.MaxAttempts+ExtraCallbacks {
 				return Decision{Status: "done", Result: "callback"}
 			}
 			at := now.Add(retry)
 			if c.CallbackAt != nil && c.CallbackAt.After(now) {
 				at = *c.CallbackAt
 			}
-			return Decision{Status: "pending", NextAt: NextOpen(r, at), Result: "callback"}
+			return Decision{Status: "pending", NextAt: NextOpen(r, at), Result: "call_later"}
 		}
 		result := c.Outcome
 		if result == "" {

@@ -221,6 +221,11 @@ func (s *Server) routes() map[string]handler {
 		"POST /api/calls/{id}/verdict":  s.verdict,
 		"PUT /api/calls/{id}/answers":   s.editAnswers,
 		"PUT /api/calls/{id}/form":      s.fillForm,
+		"POST /api/calls/{id}/analyze":  s.analyzeCall,
+
+		"GET /api/ai":    s.getAI,
+		"PUT /api/ai":    s.setAI,
+		"DELETE /api/ai": s.dropAI,
 
 		"GET /api/lists":         s.listLists,
 		"POST /api/lists":        s.uploadList,

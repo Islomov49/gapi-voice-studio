@@ -138,6 +138,12 @@ var mcpTools = []mcpTool{
 		call: func(a map[string]any) (string, string, any) {
 			return "PUT", "/api/calls/" + arg(a, "call_id") + "/form", pick(a, "answers", "summary")
 		}},
+	{Name: "analyze_call", Description: "Have the Studio's own model read a finished call again: it fills the form (keeping answers a person corrected), writes the summary and lists what to check by ear (\"doubts\"). " +
+		"Works only when the person has added their Gemini key in the interface (studio_status says \"ai\": true); with it every answered call is read this way by itself, and your part is to look at \"doubts\" and at calls whose \"analysis\" is \"failed\".",
+		InputSchema: obj([]string{"call_id"}, map[string]any{"call_id": str("The call's id")}),
+		call: func(a map[string]any) (string, string, any) {
+			return "POST", "/api/calls/" + arg(a, "call_id") + "/analyze", nil
+		}},
 	{Name: "import_contacts", Description: "Upload a list of people to call: an .xlsx or .csv whose first row is the headers. One column holds the phone numbers; the others become the script's variables. " +
 		"Answers how many rows were accepted, duplicated, without a valid number or on the stop list, and the variables' names.",
 		InputSchema: obj([]string{"filename"}, map[string]any{"filename": str("The file's name with its extension, e.g. clients.xlsx"), "text": str("A .csv file's text"),
@@ -173,7 +179,9 @@ var mcpTools = []mcpTool{
 		"crm (optional, for a list that came from crm_import_stage): {\"connection_id\", \"note\": true to write a note onto each card when the person's calls are over, " +
 		"\"move\": {result: {\"pipeline_id\", \"stage_id\"}}, \"task\": {result: the task's words for the card's responsible person}, " +
 		"\"feed\": {\"entity\", \"pipeline_id\", \"stage_id\"} to keep adding the cards that arrive at a stage while the campaign runs (then list_id may be left out)}. " +
-		"A result is agreed, resolved, declined, callback, lost_interest, do_not_call, no_answer, busy, wrong_number, or \"*\" for any other.",
+		"A result is agreed, resolved, declined, callback, lost_interest, do_not_call, no_answer, busy, wrong_number, or \"*\" for any other. " +
+		"callback is a person a human should call (the agent promised a manager's call, or the person kept asking to be called later); " +
+		"a call the agent itself places later at the person's request is not a result, the person stays in the queue.",
 		InputSchema: obj([]string{"name", "version_id"}, map[string]any{"name": str("The campaign's name"), "version_id": str("The agent version to call with"),
 			"list_id": str("The list to call"), "line": str("The Gapi line to call from, when the project has several"), "rules": any_("The calling rules"), "crm": any_("What the campaign does in the CRM")}),
 		call: func(a map[string]any) (string, string, any) {

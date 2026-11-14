@@ -36,6 +36,7 @@ import (
 	"github.com/Islomov49/gapi-voice-studio/server/internal/db"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/dialer"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/gapi"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/gemini"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/seal"
 )
 
@@ -74,7 +75,7 @@ func main() {
 	defer pool.Close()
 
 	client := gapi.New(env("STUDIO_GAPI_URL", "https://console.gapi.uz"))
-	engine := &dialer.Engine{DB: pool, Gapi: client, Seal: sealer, Now: time.Now, Analyzer: analyze.Baseline{}}
+	engine := &dialer.Engine{DB: pool, Gapi: client, Seal: sealer, Now: time.Now, Analyzer: analyze.Baseline{}, Gemini: gemini.New(os.Getenv("STUDIO_GEMINI_URL"))}
 	server := &api.Server{DB: pool, Gapi: client, Seal: sealer, Now: time.Now, Engine: engine, SecureCookies: os.Getenv("STUDIO_SECURE_COOKIES") == "1",
 		DefaultToken: os.Getenv("STUDIO_GAPI_TOKEN"), Version: version}
 	if dir := os.Getenv("STUDIO_WEB_DIR"); dir != "" {

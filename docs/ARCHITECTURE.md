@@ -9,7 +9,8 @@ public voice API and of nothing else: every call goes out through the Gapi proje
 | `internal/compile` | A Studio agent version into the agent Gapi is called with: the script plus the parts nobody can leave out (the AI greeting, "do not call me" ends the call, the form's questions); checks before a call |
 | `internal/rules` | The calling rules as functions of the clock: hours, retries, what becomes of a person after a call, the guard between portions |
 | `internal/dialer` | The one place a number is dialled from: channel limit, stop list, portions, following each call to its end |
-| `internal/analyze` | Reads a finished call's text without a language model: the greeting check and the plain ways people say "do not call me" |
+| `internal/analyze` | Reads a finished call's text. Without a language model: the greeting check, the plain ways people say "do not call me", and the agent's promise to call again with its time (`callback.go`). With the workspace's own Gemini key (`ai.go`): the form, a summary, doubts; every answer is checked against the call's text before it is kept |
+| `internal/gemini` | The Gemini Interactions API as the Studio uses it: one question answered as JSON of a given shape, not stored on Google's side; the model list checks a key |
 | `internal/sheets`, `internal/phone` | Upload of .xlsx/.csv, numbers to `+998...`, results as .xlsx |
 | `internal/templates` | The four task types: feedback, lead qualification, reminder, win-back |
 | `internal/crm` | Bitrix24 (inbound webhook) and amoCRM (long-lived token, API v4) behind one interface: pipelines, the cards at a stage, a note, a stage change, a to-do. `crmtest` stands in for both in tests |

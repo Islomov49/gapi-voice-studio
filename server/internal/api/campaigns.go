@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -101,9 +102,105 @@ func (s *Server) getCampaign(w http.ResponseWriter, r *http.Request, ws *Workspa
 		from calls where campaign_id = $1`, c.ID).Scan(&results, &calls, &talked, &seconds, &charged); err != nil {
 		return err
 	}
-	writeJSON(w, 200, map[string]any{"campaign": c, "results": results,
+	stats, err := s.formStats(r.Context(), c.ID, c.VersionID)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, map[string]any{"campaign": c, "results": results, "form": stats,
 		"calls": map[string]any{"placed": calls, "answered": talked, "seconds": seconds, "charged_g": charged}})
 	return nil
+}
+
+// fieldStats is what a campaign's people answered to one field of the form.
+type fieldStats struct {
+	Key      string       `json:"key"`
+	Title    string       `json:"title"`
+	Type     string       `json:"type"`
+	Answered int          `json:"answered"`
+	Values   []valueCount `json:"values,omitempty"`
+	Average  *float64     `json:"average,omitempty"`
+}
+
+type valueCount struct {
+	Value string `json:"value"`
+	N     int    `json:"n"`
+}
+
+// formStats counts the answers of a campaign's people, each person by their
+// last call: how many answered a field, and for the fields with few possible
+// values, how many gave each.
+func (s *Server) formStats(ctx context.Context, campaignID, versionID string) ([]fieldStats, error) {
+	var spec model.Spec
+	if err := s.DB.QueryRow(ctx, `select spec from agent_versions where id = $1`, versionID).Scan(&spec); err != nil {
+		return nil, err
+	}
+	out := []fieldStats{}
+	if len(spec.Form) == 0 {
+		return out, nil
+	}
+	rows, err := s.DB.Query(ctx, `select k.answers from targets t join calls k on k.id = t.last_call_id where t.campaign_id = $1 and k.answers <> '{}'::jsonb`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := pgx.CollectRows(rows, pgx.RowTo[map[string]model.Answer])
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range spec.Form {
+		st := fieldStats{Key: f.Key, Title: f.Title, Type: f.Type}
+		counts := map[string]int{}
+		sum := 0.0
+		for _, answers := range all {
+			a, ok := answers[f.Key]
+			if !ok || a.Value == nil {
+				continue
+			}
+			st.Answered++
+			switch v := a.Value.(type) {
+			case bool:
+				counts[map[bool]string{true: "да", false: "нет"}[v]]++
+			case float64:
+				sum += v
+				counts[strconv.FormatFloat(v, 'f', -1, 64)]++
+			case string:
+				if f.Type == "choice" {
+					counts[v]++
+				}
+			}
+		}
+		if (f.Type == "number" || f.Type == "rating") && st.Answered > 0 {
+			avg := sum / float64(st.Answered)
+			st.Average = &avg
+		}
+		// in the order a person expects: the field's options, yes before no, numbers ascending
+		var order []string
+		switch f.Type {
+		case "choice":
+			order = f.Options
+		case "yesno":
+			order = []string{"да", "нет"}
+		case "rating":
+			order = []string{"1", "2", "3", "4", "5"}
+		case "number":
+			if len(counts) <= 8 {
+				for v := range counts {
+					order = append(order, v)
+				}
+				sort.Slice(order, func(i, j int) bool {
+					a, _ := strconv.ParseFloat(order[i], 64)
+					b, _ := strconv.ParseFloat(order[j], 64)
+					return a < b
+				})
+			}
+		}
+		for _, v := range order {
+			if n := counts[v]; n > 0 || f.Type != "number" {
+				st.Values = append(st.Values, valueCount{Value: v, N: n})
+			}
+		}
+		out = append(out, st)
+	}
+	return out, nil
 }
 
 // createCampaign: POST /api/campaigns {"name", "version_id", "list_id", "line", "rules"}.

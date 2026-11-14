@@ -31,6 +31,7 @@ import (
 	"github.com/Islomov49/gapi-voice-studio/server/internal/dialer"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/gapi"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/gapi/gapitest"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/gemini"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/rules"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/seal"
 )
@@ -38,6 +39,7 @@ import (
 type fixture struct {
 	t      *testing.T
 	fake   *gapitest.Fake
+	model  *fakeGemini
 	engine *dialer.Engine
 	pool   *pgxpool.Pool
 	http   *http.Client
@@ -68,11 +70,12 @@ func newFixture(t *testing.T) *fixture {
 	clock := func() time.Time { return f.now }
 	sealer, _ := seal.New("a secret long enough for a test")
 	client := gapi.New(f.fake.URL)
-	f.engine = &dialer.Engine{DB: pool, Gapi: client, Seal: sealer, Now: clock, Analyzer: analyze.Baseline{}}
+	f.model = newFakeGemini()
+	f.engine = &dialer.Engine{DB: pool, Gapi: client, Seal: sealer, Now: clock, Analyzer: analyze.Baseline{}, Gemini: gemini.New(f.model.server.URL)}
 	server := httptest.NewServer((&Server{DB: pool, Gapi: client, Seal: sealer, Now: clock, Engine: f.engine}).Handler())
 	jar, _ := cookiejar.New(nil)
 	f.http, f.base = &http.Client{Jar: jar}, server.URL
-	t.Cleanup(func() { server.Close(); f.fake.Close(); pool.Close() })
+	t.Cleanup(func() { server.Close(); f.fake.Close(); f.model.server.Close(); pool.Close() })
 	return f
 }
 
@@ -353,6 +356,57 @@ func TestGuardPauses(t *testing.T) {
 	}
 }
 
+// A person who asks to be called later is called at the time the agent
+// repeated, past the campaign's attempts; the model's "callback" label alone
+// (a manager will call) does not make the agent call again.
+func TestCallLater(t *testing.T) {
+	f := newFixture(t)
+	f.must("POST", "/api/connect", map[string]any{"token": "gapi_ab12cd34_0123456789abcdef0123456789abcdef"})
+	f.must("PUT", "/api/workspace", map[string]any{"tester_phone": "+998900000001"})
+	version := f.must("POST", "/api/agents", map[string]any{"template": "feedback"})["latest"].(map[string]any)["id"].(string)
+	test := f.must("POST", "/api/calls/test", map[string]any{"version_id": version})["call_id"].(string)
+	f.fake.Talk("g1", "callback", f.now, "Alo?", ">Alo", greeting, ">Hozir bandman, yarim soatdan keyin", "Xo'p, sizga yarim soatdan keyin qayta qo'ng'iroq qilamiz. Xayr!")
+	f.tick()
+	checks := f.must("GET", "/api/calls/"+test, nil)["checks"].(map[string]any)
+	if checks["callback"] != true || checks["callback_at"] != f.now.Add(30*time.Minute).UTC().Format(time.RFC3339) {
+		t.Fatalf("the test call's promise to call again: %v", checks)
+	}
+	f.must("POST", "/api/calls/"+test+"/verdict", map[string]any{"accepted": true})
+	list := f.upload("l.csv", "phone\n901110001\n901110002\n")
+	campaign := f.must("POST", "/api/campaigns", map[string]any{"name": "c", "version_id": version, "list_id": list["id"],
+		"rules": map[string]any{"from": "09:00", "to": "20:00", "days": []int{1}, "max_attempts": 1, "retry_minutes": 60, "first_portion": 2, "portion": 2}})["campaign"].(map[string]any)["id"].(string)
+	f.must("POST", "/api/campaigns/"+campaign+"/start", nil)
+	f.tick()
+	f.fake.Talk("g2", "callback", f.now, "Alo?", ">Alo", greeting, ">O'n daqiqadan keyin qo'ng'iroq qiling", "Xo'p, sizga o'n daqiqadan keyin qayta qo'ng'iroq qilamiz. Xayr!")
+	f.fake.Talk("g3", "callback", f.now, "Alo?", ">Alo", greeting, ">Ikki", "Afsus. Nima yoqmadi?", ">Kechikdi", "Uzr so'raymiz. Rahbarimiz bugun sizga qo'ng'iroq qiladi.")
+	f.tick()
+	rows := f.must("GET", "/api/campaigns/"+campaign+"/targets", nil)["targets"].([]any)
+	first, second := rows[0].(map[string]any), rows[1].(map[string]any)
+	if first["status"] != "pending" || first["result"] != "call_later" || second["status"] != "done" || second["result"] != "callback" {
+		t.Fatalf("after the two talks: %v / %v", first, second)
+	}
+	if c := f.must("GET", "/api/campaigns/"+campaign, nil)["campaign"].(map[string]any); c["status"] != "running" {
+		t.Fatalf("a campaign with a call still to place: %v", c["status"])
+	}
+	f.now = f.now.Add(9 * time.Minute)
+	f.tick()
+	if n := len(f.fake.Placed()); n != 3 {
+		t.Fatalf("called before the time the person named: %d calls", n)
+	}
+	f.now = f.now.Add(time.Minute)
+	f.tick()
+	if n := len(f.fake.Placed()); n != 4 {
+		t.Fatalf("not called at the time the person named: %d calls", n)
+	}
+	f.fake.Talk("g4", "resolved", f.now, "Alo?", ">Alo", greeting, ">Besh", "Rahmat! Xayr.")
+	f.tick()
+	f.tick()
+	c := f.must("GET", "/api/campaigns/"+campaign, nil)["campaign"].(map[string]any)
+	if c["status"] != "done" || c["counts"].(map[string]any)["done"] != 2.0 {
+		t.Fatalf("after the call back: %v", c)
+	}
+}
+
 // An assistant runs the same road over MCP, and meets the same refusals.
 func TestMCP(t *testing.T) {
 	f := newFixture(t)
@@ -538,5 +592,126 @@ func TestCRM(t *testing.T) {
 	// a campaign fed from a stage does not finish by itself
 	if c := f.must("GET", "/api/campaigns/"+campaign, nil)["campaign"].(map[string]any); c["status"] != "running" || c["crm_failed"] != 0.0 {
 		t.Fatalf("the campaign: %v", c)
+	}
+}
+
+// fakeGemini stands in for Google's API: one key it takes, and the answer it
+// gives to every call it is asked to read.
+type fakeGemini struct {
+	server *httptest.Server
+	answer map[string]any
+	down   bool
+	asked  []map[string]any
+}
+
+const geminiKey = "AIzaTestKey0123456789abcdefghij"
+
+func newFakeGemini() *fakeGemini {
+	g := &fakeGemini{}
+	g.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Header.Get("x-goog-api-key") != geminiKey:
+			w.WriteHeader(401)
+			_, _ = w.Write([]byte(`{"error": {"code": "authentication", "message": "The API key is missing, invalid, or expired."}}`))
+		case r.Method == "GET" && r.URL.Path == "/v1beta/models":
+			_, _ = w.Write([]byte(`{"models": [{"name": "models/gemini-flash-latest"}, {"name": "models/gemini-3.8-flash"}]}`))
+		case r.Method == "POST" && r.URL.Path == "/v1beta/interactions" && g.down:
+			w.WriteHeader(429)
+			_, _ = w.Write([]byte(`{"error": {"code": "rate_limit_exceeded", "message": "slow down"}}`))
+		case r.Method == "POST" && r.URL.Path == "/v1beta/interactions":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			g.asked = append(g.asked, body)
+			text, _ := json.Marshal(g.answer)
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "completed", "steps": []any{
+				map[string]any{"type": "thought"},
+				map[string]any{"type": "model_output", "content": []any{map[string]any{"type": "text", "text": string(text)}}}}})
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	return g
+}
+
+// With the person's own Gemini key the Studio reads each answered call: the
+// form is filled, an answer nobody said is thrown out, a person's correction
+// outlives a second reading, and a model that does not answer costs nothing
+// but the reading.
+func TestAI(t *testing.T) {
+	f := newFixture(t)
+	f.must("POST", "/api/connect", map[string]any{"token": "gapi_ab12cd34_0123456789abcdef0123456789abcdef"})
+	f.must("PUT", "/api/workspace", map[string]any{"tester_phone": "+998900000001"})
+	version := f.must("POST", "/api/agents", map[string]any{"template": "feedback"})["latest"].(map[string]any)["id"].(string)
+
+	f.refused("PUT", "/api/ai", map[string]any{"key": "AIzaSomebodyElsesKey0123456789"}, "ai_key_invalid")
+	f.refused("PUT", "/api/ai", map[string]any{"key": geminiKey, "model": "gemini-9-ultra"}, "ai_model_unknown")
+	if got := f.must("PUT", "/api/ai", map[string]any{"key": geminiKey}); got["connected"] != true || got["model"] != "gemini-flash-latest" {
+		t.Fatalf("the key was not kept: %v", got)
+	}
+	if me := f.must("GET", "/api/me", nil); me["ai"] != true {
+		t.Fatalf("me does not say a model reads the calls: %v", me["ai"])
+	}
+
+	f.model.answer = map[string]any{
+		"answers": []any{
+			map[string]any{"key": "rating", "value": "5", "quote": "besh qo'yaman"},
+			map[string]any{"key": "liked", "value": "Быстро доставили", "quote": "tez yetkazishdi"},
+			map[string]any{"key": "complaint", "value": "Дорого", "quote": "juda qimmat ekan"},
+		},
+		"summary": "Клиент доволен, оценка пять.", "doubts": []any{"Вторая реплика клиента распознана неуверенно."},
+		"callback_promised": false, "callback_time": "", "do_not_call": false,
+	}
+	test := f.must("POST", "/api/calls/test", map[string]any{"version_id": version})["call_id"].(string)
+	f.fake.Talk("g1", "resolved", f.now, "Alo?", ">Alo", greeting, ">Ha, besh qo'yaman, tez yetkazishdi.", "Rahmat!")
+	f.tick()
+	call := f.must("GET", "/api/calls/"+test, nil)
+	answers := call["answers"].(map[string]any)
+	if call["analysis"] != "ai" || call["summary"] != "Клиент доволен, оценка пять." || answers["rating"].(map[string]any)["value"] != 5.0 ||
+		answers["liked"].(map[string]any)["quote"] != "tez yetkazishdi" || answers["complaint"] != nil || len(call["doubts"].([]any)) != 2 {
+		t.Fatalf("the call as the model read it: %v / %v / %v", call["analysis"], answers, call["doubts"])
+	}
+	asked := f.model.asked[0]
+	if asked["store"] != false || asked["model"] != "gemini-flash-latest" || !strings.Contains(asked["input"].(string), "caller: Ha, besh qo'yaman") {
+		t.Fatalf("what the model was asked: %v", asked)
+	}
+
+	// a person corrects an answer; a second reading keeps the correction
+	f.must("PUT", "/api/calls/"+test+"/answers", map[string]any{"rating": 4})
+	f.model.answer["summary"] = "Клиент доволен."
+	call = f.must("POST", "/api/calls/"+test+"/analyze", nil)
+	if a := call["answers"].(map[string]any)["rating"].(map[string]any); a["value"] != 4.0 || a["edited"] != true || call["summary"] != "Клиент доволен." {
+		t.Fatalf("after a second reading: %v", call["answers"])
+	}
+
+	// the model does not answer: the call is closed with the plain checks
+	f.model.down = true
+	second := f.must("POST", "/api/calls/test", map[string]any{"version_id": version})["call_id"].(string)
+	f.fake.Talk("g2", "resolved", f.now, "Alo?", ">Alo", greeting, ">Uch", "Rahmat!")
+	f.tick()
+	call = f.must("GET", "/api/calls/"+second, nil)
+	if call["settled"] != true || call["analysis"] != "failed" || call["analysis_error"] != "rate_limit_exceeded" || call["checks"].(map[string]any)["ai_disclosed"] != true {
+		t.Fatalf("a call the model did not read: %v", call)
+	}
+	f.refused("POST", "/api/calls/"+second+"/analyze", nil, "ai_failed")
+
+	f.must("DELETE", "/api/ai", nil)
+	f.refused("POST", "/api/calls/"+second+"/analyze", nil, "ai_not_connected")
+
+	// a campaign counts its people's answers
+	f.must("PUT", "/api/ai", map[string]any{"key": geminiKey})
+	f.model.down = false
+	f.must("POST", "/api/calls/"+test+"/verdict", map[string]any{"accepted": true})
+	list := f.upload("l.csv", "phone\n901110001\n901110002\n")
+	campaign := f.must("POST", "/api/campaigns", map[string]any{"name": "c", "version_id": version, "list_id": list["id"]})["campaign"].(map[string]any)["id"].(string)
+	f.must("POST", "/api/campaigns/"+campaign+"/start", nil)
+	f.tick()
+	f.fake.Talk("g3", "resolved", f.now, "Alo?", ">Alo", greeting, ">Ha, besh qo'yaman, tez yetkazishdi.", "Rahmat!")
+	f.fake.Talk("g4", "resolved", f.now, "Alo?", ">Alo", greeting, ">Ha, besh qo'yaman, tez yetkazishdi.", "Rahmat!")
+	f.tick()
+	stats := f.must("GET", "/api/campaigns/"+campaign, nil)["form"].([]any)
+	rating := stats[0].(map[string]any)
+	if rating["key"] != "rating" || rating["answered"] != 2.0 || rating["average"] != 5.0 || rating["values"].([]any)[4].(map[string]any)["n"] != 2.0 {
+		t.Fatalf("the campaign's answers counted: %v", stats)
 	}
 }

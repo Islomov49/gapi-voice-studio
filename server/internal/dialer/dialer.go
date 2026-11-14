@@ -20,6 +20,7 @@ import (
 	"github.com/Islomov49/gapi-voice-studio/server/internal/compile"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/crm"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/gapi"
+	"github.com/Islomov49/gapi-voice-studio/server/internal/gemini"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/model"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/phone"
 	"github.com/Islomov49/gapi-voice-studio/server/internal/rules"
@@ -32,6 +33,8 @@ type Engine struct {
 	Seal     *seal.Sealer
 	Now      func() time.Time
 	Analyzer analyze.Analyzer
+	// Reads calls for the workspaces that gave their own Gemini key.
+	Gemini *gemini.Client
 
 	mu sync.Mutex // one Tick at a time
 }
@@ -149,10 +152,12 @@ type openCall struct {
 	startedAt                             *time.Time
 	sealed                                []byte
 	spec                                  model.Spec
+	aiKey                                 []byte // the workspace's Gemini key, sealed; nil if none
+	aiModel                               string
 }
 
 func (e *Engine) settle(ctx context.Context, tokens map[string]string) error {
-	rows, err := e.DB.Query(ctx, `select c.id, c.workspace_id, c.kind, c.gapi_call_id, c.status, c.target_id, c.created_at, c.started_at, w.gapi_token_sealed, v.spec
+	rows, err := e.DB.Query(ctx, `select c.id, c.workspace_id, c.kind, c.gapi_call_id, c.status, c.target_id, c.created_at, c.started_at, w.gapi_token_sealed, v.spec, w.gemini_key_sealed, w.gemini_model
 		from calls c join workspaces w on w.id = c.workspace_id join agent_versions v on v.id = c.agent_version_id
 		where c.settled_at is null order by c.created_at limit 300`)
 	if err != nil {
@@ -160,7 +165,7 @@ func (e *Engine) settle(ctx context.Context, tokens map[string]string) error {
 	}
 	calls, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (openCall, error) {
 		c := openCall{}
-		return c, row.Scan(&c.id, &c.workspaceID, &c.kind, &c.gapiID, &c.status, &c.targetID, &c.createdAt, &c.startedAt, &c.sealed, &c.spec)
+		return c, row.Scan(&c.id, &c.workspaceID, &c.kind, &c.gapiID, &c.status, &c.targetID, &c.createdAt, &c.startedAt, &c.sealed, &c.spec, &c.aiKey, &c.aiModel)
 	})
 	if err != nil {
 		return err
@@ -227,7 +232,8 @@ func (e *Engine) settle(ctx context.Context, tokens map[string]string) error {
 func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gapi.Transcript, now time.Time) error {
 	res := &analyze.Result{}
 	checks := map[string]any{}
-	analysis := "none"
+	analysis, analysisError := "none", ""
+	doubts := []string{}
 	if text != nil {
 		var err error
 		if res, err = e.Analyzer.Analyze(ctx, c.spec, text, now); err != nil {
@@ -237,7 +243,33 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 		} else {
 			analysis = "done"
 		}
+		// the workspace's own model reads an answered call: the form, a summary,
+		// and a second look at what the plain checks read
+		failure := ""
+		if g.Status == "ended" && len(c.aiKey) > 0 && e.Gemini != nil {
+			if reading, err := e.Read(ctx, c.aiKey, c.aiModel, c.spec, text.Turns, now); err != nil {
+				slog.Warn("dialer: the model did not read a call", "call", c.id, "err", err)
+				analysis, failure = "failed", ReadingError(err)
+			} else {
+				analysis, doubts = "ai", reading.Doubts
+				res.Answers, res.Summary = reading.Answers, reading.Summary
+				res.DoNotCall = res.DoNotCall || reading.DoNotCall
+				if reading.Callback && (!res.Callback || res.CallbackAt == nil) {
+					res.Callback = true
+					if res.CallbackAt == nil {
+						res.CallbackAt = reading.CallbackAt
+					}
+				}
+			}
+		}
+		analysisError = failure
 		checks["ai_disclosed"], checks["do_not_call"] = res.Disclosed, res.DoNotCall
+		if res.Callback || res.CallbackAt != nil {
+			checks["callback"] = true
+			if res.CallbackAt != nil {
+				checks["callback_at"] = res.CallbackAt.UTC().Format(time.RFC3339)
+			}
+		}
 	}
 	outcome := g.Outcome
 	if outcome == "" && text != nil {
@@ -262,8 +294,9 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 	defer tx.Rollback(ctx)
 	var number string
 	err = tx.QueryRow(ctx, `update calls set status = $2, end_reason = $3, outcome = $4, duration_seconds = $5, charged_g = $6, started_at = $7, ended_at = $8,
-		transcript = $9, answers = $10, summary = $11, checks = $12, analysis = $13, settled_at = $14 where id = $1 and settled_at is null returning phone`,
-		c.id, g.Status, g.EndReason, outcome, g.DurationSeconds, g.ChargedG, g.StartedAt, ended, turns, answers, res.Summary, checks, analysis, now).Scan(&number)
+		transcript = $9, answers = $10, summary = $11, checks = $12, analysis = $13, settled_at = $14, doubts = $15, analysis_error = $16
+		where id = $1 and settled_at is null returning phone`,
+		c.id, g.Status, g.EndReason, outcome, g.DurationSeconds, g.ChargedG, g.StartedAt, ended, turns, answers, res.Summary, checks, analysis, now, doubts, analysisError).Scan(&number)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // closed by another round
 	}
@@ -285,7 +318,7 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 			*c.targetID).Scan(&attempts, &ref, &r, &inCRM); err != nil {
 			return err
 		}
-		d := rules.AfterCall(r, attempts, rules.Ended{Status: g.Status, EndReason: g.EndReason, Outcome: outcome, CallbackAt: res.CallbackAt, DoNotCall: res.DoNotCall}, now)
+		d := rules.AfterCall(r, attempts, rules.Ended{Status: g.Status, EndReason: g.EndReason, Outcome: outcome, Callback: res.Callback, CallbackAt: res.CallbackAt, DoNotCall: res.DoNotCall}, now)
 		var next *time.Time
 		if d.Status == "pending" {
 			next = &d.NextAt
@@ -301,6 +334,29 @@ func (e *Engine) finish(ctx context.Context, c openCall, g *gapi.Call, text *gap
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// Read has the workspace's model read one call's text.
+func (e *Engine) Read(ctx context.Context, sealedKey []byte, model_ string, spec model.Spec, turns []gapi.Turn, now time.Time) (*analyze.Reading, error) {
+	key, err := e.Seal.Open(sealedKey)
+	if err != nil {
+		return nil, &gemini.Error{Code: "authentication", Message: "the stored key can no longer be read"}
+	}
+	ctx, cancel := context.WithTimeout(ctx, 75*time.Second)
+	defer cancel()
+	reading, err := analyze.AI{Gemini: e.Gemini, Key: key, Model: model_}.Read(ctx, spec, turns, now)
+	if reading != nil && reading.Doubts == nil {
+		reading.Doubts = []string{}
+	}
+	return reading, err
+}
+
+// ReadingError is the word kept for a reading that failed.
+func ReadingError(err error) string {
+	if code := gemini.Code(err); code != "" {
+		return code
+	}
+	return "unreachable"
 }
 
 // advance hands a running campaign its next portion once the current one has

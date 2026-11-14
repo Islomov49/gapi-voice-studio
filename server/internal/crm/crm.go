@@ -117,7 +117,7 @@ func For[T any](by map[string]T, result string) (T, bool) {
 }
 
 var results = map[string]string{
-	"agreed": "согласие", "resolved": "вопрос решён", "declined": "отказ", "callback": "просил перезвонить", "lost_interest": "потерял интерес",
+	"agreed": "согласие", "resolved": "вопрос решён", "declined": "отказ", "callback": "нужен звонок менеджера", "lost_interest": "потерял интерес",
 	"time_up": "вышло время разговора", "caller_left": "положил трубку", "talked": "разговор состоялся", "do_not_call": "просил больше не звонить",
 	"no_answer": "не ответил", "busy": "занято", "wrong_number": "неверный номер", "stop_list": "номер в стоп-листе", "provider_refused": "оператор связи не принял звонок",
 	"call_failed": "сбой звонка", "agent_left": "агент завершил разговор",

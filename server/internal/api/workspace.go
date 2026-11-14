@@ -73,7 +73,12 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request, ws *Workspace) error
 	if err := s.DB.QueryRow(r.Context(), `select count(*) from calls where workspace_id = $1 and settled_at is null`, ws.ID).Scan(&open); err != nil {
 		return err
 	}
-	out["open_calls"], out["needs"] = open, needs
+	var ai bool
+	if err := s.DB.QueryRow(r.Context(), `select gemini_key_sealed is not null from workspaces where id = $1`, ws.ID).Scan(&ai); err != nil {
+		return err
+	}
+	// ai: the workspace keeps its person's Gemini key, and the Studio reads each answered call itself
+	out["open_calls"], out["needs"], out["ai"] = open, needs, ai
 	writeJSON(w, 200, out)
 	return nil
 }

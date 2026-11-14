@@ -142,7 +142,7 @@ export default function CrmRulesCard({ campaign, editable, onSaved }: { campaign
                   <input value={taskYes} onChange={(e) => setTaskYes(e.target.value)} placeholder="Например: клиент согласен, перезвонить и оформить" />
                 </label>
                 <label>
-                  Если просил перезвонить
+                  Если нужен звонок человека
                   <input value={taskCallback} onChange={(e) => setTaskCallback(e.target.value)} placeholder="Например: перезвонить клиенту лично" />
                 </label>
               </div>

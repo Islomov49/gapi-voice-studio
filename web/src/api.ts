@@ -95,8 +95,10 @@ export type Call = {
   outcome: string
   duration_seconds: number | null
   charged_g: number | null
-  checks: Record<string, boolean>
+  checks: { ai_disclosed?: boolean; do_not_call?: boolean; callback?: boolean; callback_at?: string }
   analysis: string
+  analysis_error: string
+  doubts: string[]
   accepted: boolean | null
   feedback: string
   summary: string
@@ -118,6 +120,7 @@ export type Me = {
   online?: boolean
   open_calls: number
   needs: string[] | null
+  ai: boolean
   gapi_error?: string
 }
 
