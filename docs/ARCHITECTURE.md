@@ -6,7 +6,7 @@ public voice API and of nothing else: every call goes out through the Gapi proje
 | Package | What it does |
 | --- | --- |
 | `internal/gapi` | Client of Gapi's voice API: options, lines, a call to a phone, its text and recording. `gapitest` is the stand-in the tests use |
-| `internal/compile` | A Studio agent version into the agent Gapi is called with: the script plus the parts nobody can leave out (the AI greeting, "do not call me" ends the call, the form's questions); checks before a call |
+| `internal/compile` | A Studio agent version into the agent Gapi is called with: the script, with the lines marked `{{if name=value}}` kept only for the people they are for, plus the parts nobody can leave out (the AI greeting, "do not call me" ends the call, the form's questions); checks before a call |
 | `internal/rules` | The calling rules as functions of the clock: hours, retries, what becomes of a person after a call, the guard between portions |
 | `internal/dialer` | The one place a number is dialled from: channel limit, stop list, portions, following each call to its end |
 | `internal/analyze` | Reads a finished call's text. Without a language model: the greeting check, the plain ways people say "do not call me", and the agent's promise to call again with its time (`callback.go`). With the workspace's own Gemini key (`ai.go`): the form, a summary, doubts; every answer is checked against the call's text before it is kept |

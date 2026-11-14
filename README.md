@@ -63,6 +63,8 @@ Whoever asks, the interface or an assistant, the service checks these before eac
   a person removes one.
 - "Call me later": the agent asks when, repeats the time and hangs up; the Studio calls again at that time
   (ten minutes, two hours, tomorrow at eleven), inside the calling hours.
+- A script may hold lines for some of the people only (`{{if segment=client}} ...` at the start of a line): the
+  instruction is built per person from their columns.
 - Portions: 10 people, then 30 at a time. After a portion the campaign stops itself if the calls look wrong
   (the line fails, people ask not to be called, the agent does not introduce itself).
 

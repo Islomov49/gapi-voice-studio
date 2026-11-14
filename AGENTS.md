@@ -99,6 +99,10 @@ https://console.gapi.uz/docs/en/agents.html#prompt. What matters most:
 - Replies are heard, not read: one or two short sentences and one question at a time.
 - Values that differ per person are variables: `{{client_name}}`, `{{order}}`. A list's columns fill them by
   name (`import_contacts` answers the names); give each a default that reads well when the column is empty.
+- A line for some of the people only: start it with `{{if segment=client|partner}}` (or `!=`). It stays in the
+  instruction, without the mark, for a person whose column `segment` holds one of those values, and is left out
+  for everyone else: the agent cannot say what it was never given. Use it for what depends on who is called (an
+  existing customer is thanked, a new one is not), instead of asking the model to decide from a variable.
 - The whole instruction is at most 8,000 characters; `get_agent` shows it as the model reads it.
 
 ## Calibrating after a test call

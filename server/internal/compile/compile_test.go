@@ -13,7 +13,7 @@ import (
 
 func TestTemplatesBuild(t *testing.T) {
 	for _, tpl := range templates.All {
-		agent, err := Build(tpl.Title, tpl.Spec, DefaultLimits)
+		agent, err := Build(tpl.Title, tpl.Spec, DefaultLimits, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", tpl.ID, err)
 		}
@@ -36,7 +36,7 @@ func TestTemplatesBuild(t *testing.T) {
 func TestOwnScript(t *testing.T) {
 	spec := model.Spec{Company: "Olma", Script: "Siz do'kon yordamchisisiz. Mijoz: {{client_name}}, buyurtma: {{order}}. Bugun {{current_date}}.",
 		Form: []model.Field{{Key: "rating", Title: "Оценка", Type: "rating", Ask: "Xizmatni birdan beshgacha baholang."}, {Key: "note", Title: "Заметка", Type: "text"}}}
-	agent, err := Build("a", spec, DefaultLimits)
+	agent, err := Build("a", spec, DefaultLimits, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,5 +127,53 @@ func TestPhonesAndKeys(t *testing.T) {
 	}
 	if stats.Rows != 4 || stats.Accepted != 2 || stats.Duplicates != 1 || stats.Invalid != 1 || contacts[0].Data["zakaz"] != "стол" || contacts[1].Row != 5 {
 		t.Errorf("stats %+v contacts %+v", stats, contacts)
+	}
+}
+
+// A line marked with a condition is in the instruction only for the people it
+// is for; the variable it reads is one a list's column fills.
+func TestConditionalLines(t *testing.T) {
+	spec := model.Spec{Company: "Namuna", Variables: map[string]string{"client_name": "—"}, Script: `Siz yordamchisiz.
+{{if client_name!=—}}- Ismi: {{client_name}}.
+1. Salom: {{studio_greeting}}
+{{if segment=client|Наш  Клиент}}   Keyin: «Hamkorlik uchun rahmat!»
+{{if segment!=client|наш клиент}}   Keyin: «Tanishganimdan xursandman.»
+2. Savol.`}
+	if p := Check(spec, DefaultLimits); len(p) > 0 {
+		t.Fatal(p)
+	}
+	if v := Variables(spec); len(v) != 2 || v[1] != "segment" {
+		t.Fatalf("variables: %v", v)
+	}
+	for name, c := range map[string]struct {
+		data     map[string]string
+		in, out_ []string
+	}{
+		"a client by name": {map[string]string{"client_name": "Jasur", "segment": "наш клиент"}, []string{"- Ismi: {{client_name}}.", "  Keyin: «Hamkorlik uchun rahmat!»"}, []string{"Tanishganimdan", "{{if"}},
+		"nobody we know":   {nil, []string{"Tanishganimdan"}, []string{"Ismi:", "Hamkorlik", "{{if"}},
+		"another segment":  {map[string]string{"segment": "partner"}, []string{"Tanishganimdan"}, []string{"Hamkorlik"}},
+		"the value's case": {map[string]string{"segment": " CLIENT "}, []string{"Hamkorlik"}, []string{"Tanishganimdan"}},
+	} {
+		agent, err := Build("a", spec, DefaultLimits, c.data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range c.in {
+			if !strings.Contains(agent.Prompt, want) {
+				t.Errorf("%s: %q is missing", name, want)
+			}
+		}
+		for _, not := range c.out_ {
+			if strings.Contains(agent.Prompt, not) {
+				t.Errorf("%s: %q is there", name, not)
+			}
+		}
+		if _, ok := agent.Variables["segment"]; !ok {
+			t.Errorf("%s: segment is not declared", name)
+		}
+	}
+	spec.Script = "Salom. {{if segment=client}} rahmat"
+	if p := Check(spec, DefaultLimits); len(p) == 0 {
+		t.Error("a condition in the middle of a line was accepted")
 	}
 }

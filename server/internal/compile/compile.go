@@ -32,6 +32,11 @@ var (
 	place   = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 	braces  = regexp.MustCompile(`\{\{([^{}]*)\}\}`)
 	varName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,39}$`)
+	// A line for some of the people only: "{{if segment=client|partner}} text"
+	// stays in the instruction, without the mark, when the person's value of
+	// the variable is one of those listed; "!=" when it is none of them.
+	cond  = regexp.MustCompile(`^(\s*)\{\{\s*if\s+([a-z][a-z0-9_]{0,39})\s*(!?=)([^{}]*)\}\}[ \t]?`)
+	anyIf = regexp.MustCompile(`\{\{\s*if\b[^{}]*\}\}`)
 	// Filled in by Gapi at the start of a call, never declared.
 	platformVars = map[string]bool{"current_date": true, "current_weekday": true, "current_time": true}
 )
@@ -77,7 +82,13 @@ func Check(s model.Spec, lim Limits) []Problem {
 			add("variables", fmt.Sprintf("variable %q: a name is a-z, 0-9 and _, starts with a letter, and is not one the platform fills in", name))
 		}
 	}
-	for _, m := range braces.FindAllStringSubmatch(s.Script, -1) {
+	for _, line := range strings.Split(s.Script, "\n") {
+		if anyIf.MatchString(cond.ReplaceAllString(line, "")) {
+			add("script", "a condition is written at the start of its line as {{if name=value}} or {{if name!=value}}, values separated by |")
+			break
+		}
+	}
+	for _, m := range braces.FindAllStringSubmatch(conditional(s.Script, nil, true), -1) {
 		if name := strings.TrimSpace(m[1]); !varName.MatchString(name) {
 			add("script", fmt.Sprintf("{{%s}}: a variable's name is a-z, 0-9 and _, starting with a letter", name))
 		}
@@ -118,7 +129,7 @@ func Check(s model.Spec, lim Limits) []Problem {
 		}
 	}
 	if len(out) == 0 {
-		if n := utf8.RuneCountInString(prompt(s, s.Variables)); n > lim.PromptChars {
+		if n := utf8.RuneCountInString(prompt(s, s.Variables, true)); n > lim.PromptChars {
 			add("script", fmt.Sprintf("the instruction is %d characters with the Studio's rules added, at most %d", n, lim.PromptChars))
 		}
 	}
@@ -135,10 +146,63 @@ func declared(s model.Spec) map[string]string {
 	for k, v := range s.Variables {
 		out[k] = v
 	}
-	for _, m := range place.FindAllStringSubmatch(s.Script, -1) {
+	for _, m := range place.FindAllStringSubmatch(conditional(s.Script, nil, true), -1) {
 		name := m[1]
 		if _, ok := out[name]; !ok && !platformVars[name] && name != "studio_greeting" {
 			out[name] = ""
+		}
+	}
+	for _, line := range strings.Split(s.Script, "\n") {
+		if m := cond.FindStringSubmatch(line); m != nil {
+			if _, ok := out[m[2]]; !ok && !platformVars[m[2]] {
+				out[m[2]] = ""
+			}
+		}
+	}
+	return out
+}
+
+// conditional keeps the script's lines that are for this person: a line
+// marked {{if name=value}} stays, without its mark, when the person's value
+// of the variable (a contact's column, or the variable's default) is among
+// those listed. With all set every such line stays: the longest the
+// instruction can be.
+func conditional(script string, values map[string]string, all bool) string {
+	if !strings.Contains(script, "{{") {
+		return script
+	}
+	lines := strings.Split(script, "\n")
+	kept := lines[:0:0]
+	for _, line := range lines {
+		m := cond.FindStringSubmatch(line)
+		if m == nil {
+			kept = append(kept, line)
+			continue
+		}
+		have := strings.ToLower(strings.Join(strings.Fields(values[m[2]]), " "))
+		among := false
+		for _, v := range strings.Split(m[4], "|") {
+			if strings.ToLower(strings.Join(strings.Fields(v), " ")) == have {
+				among = true
+			}
+		}
+		if all || among == (m[3] == "=") {
+			kept = append(kept, m[1]+line[len(m[0]):])
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// person is the values a person's lines are chosen by: their own, and the
+// variables' defaults where they have none.
+func person(s model.Spec, data map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range s.Variables {
+		out[k] = v
+	}
+	for k, v := range data {
+		if strings.TrimSpace(v) != "" {
+			out[k] = v
 		}
 	}
 	return out
@@ -157,8 +221,8 @@ func Variables(s model.Spec) []string {
 
 // prompt is the instruction as the model will read it, with values in the
 // variables' places: for measuring its length and for showing it.
-func prompt(s model.Spec, values map[string]string) string {
-	text := instruction(s)
+func prompt(s model.Spec, values map[string]string, all bool) string {
+	text := instruction(s, person(s, values), all)
 	d := declared(s)
 	return place.ReplaceAllStringFunc(text, func(m string) string {
 		name := place.FindStringSubmatch(m)[1]
@@ -173,7 +237,7 @@ func prompt(s model.Spec, values map[string]string) string {
 }
 
 // Preview is the instruction with a contact's values filled in.
-func Preview(s model.Spec, values map[string]string) string { return prompt(s, values) }
+func Preview(s model.Spec, values map[string]string) string { return prompt(s, values, false) }
 
 // CallbackRule has the agent settle a later call in words the Studio can read
 // back from the call's text (analyze.Callback): the time repeated in a plain
@@ -182,10 +246,11 @@ const CallbackRule = "Mijoz hozir gaplasha olmasligini aytsa yoki keyinroq qo'ng
 	"Mijoz aytgan vaqtni o'z so'zlari bilan aniq takrorlang va «qayta qo'ng'iroq qilamiz» deng, masalan: «Xo'p, sizga yarim soatdan keyin qayta qo'ng'iroq qilamiz» yoki «Xo'p, sizga ertaga soat o'n birda qayta qo'ng'iroq qilamiz». " +
 	"Vaqt aytmasa: «Xo'p, sizga keyinroq qayta qo'ng'iroq qilamiz» deng. Shundan keyin xayrlashing va suhbatni tugating."
 
-// instruction is the script plus the Studio's own rules, variables not filled.
-func instruction(s model.Spec) string {
+// instruction is the script, with the lines that are for this person, plus
+// the Studio's own rules; variables not filled.
+func instruction(s model.Spec, values map[string]string, all bool) string {
 	greeting := "«" + Greeting(s.Company) + "»"
-	script := strings.TrimSpace(s.Script)
+	script := strings.TrimSpace(conditional(s.Script, values, all))
 	var rules []string
 	if strings.Contains(script, GreetingPlace) {
 		script = strings.ReplaceAll(script, GreetingPlace, greeting)
@@ -215,8 +280,9 @@ func instruction(s model.Spec) string {
 	return b.String()
 }
 
-// Build is the agent Gapi is called with for this version.
-func Build(name string, s model.Spec, lim Limits) (gapi.Agent, error) {
+// Build is the agent Gapi is called with for this version and this person:
+// data is the person's columns, which choose the conditional lines.
+func Build(name string, s model.Spec, lim Limits, data map[string]string) (gapi.Agent, error) {
 	if problems := Check(s, lim); len(problems) > 0 {
 		return gapi.Agent{}, problems[0]
 	}
@@ -230,7 +296,7 @@ func Build(name string, s model.Spec, lim Limits) (gapi.Agent, error) {
 	}
 	return gapi.Agent{
 		Name:   name,
-		Prompt: instruction(s),
+		Prompt: instruction(s, person(s, data), false),
 		Voice:  voice,
 		// A call the agent places: the person who picks up speaks first, and
 		// Gapi opens with its own "Alo?" (measured there on 2026-11-12).

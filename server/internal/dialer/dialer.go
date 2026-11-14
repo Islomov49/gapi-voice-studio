@@ -80,7 +80,7 @@ func (e *Engine) reserve(ctx context.Context, workspaceID string, channels int, 
 // StartTest calls the tester with one version of an agent. The call's row is
 // answered at once; Tick follows the call from there.
 func (e *Engine) StartTest(ctx context.Context, workspaceID, token string, channels int, versionID, agentName string, spec model.Spec, number string, values map[string]string, line string) (string, error) {
-	agent, err := compile.Build(agentName, spec, compile.DefaultLimits)
+	agent, err := compile.Build(agentName, spec, compile.DefaultLimits, values)
 	if err != nil {
 		return "", err
 	}
@@ -519,7 +519,7 @@ func (e *Engine) dialOne(ctx context.Context, c running, token string, now time.
 		_, err := e.DB.Exec(ctx, `update targets set status = 'skipped', attempts = attempts - 1, result = 'stop_list' where id = $1`, targetID)
 		return again, err
 	}
-	agent, err := compile.Build(c.agentName, c.spec, compile.DefaultLimits)
+	agent, err := compile.Build(c.agentName, c.spec, compile.DefaultLimits, vars)
 	if err != nil {
 		back(0)
 		pause("agent_invalid")

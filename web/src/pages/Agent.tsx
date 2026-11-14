@@ -187,6 +187,11 @@ export default function AgentPage() {
               Перепишите под себя первый абзац (кто звонит) и список «Ma'lumotlar» (факты, которые агент может назвать). Чего нет в сценарии, агент не знает. Данные из
               списка контактов подставляются как <span className="mono">{'{{client_name}}'}</span>.
             </div>
+            <div className="muted small" style={{ marginTop: 6 }}>
+              Строка только для части людей: начните её с <span className="mono">{'{{if segment=клиент}}'}</span>, и она попадёт в инструкцию только тем, у кого в колонке
+              списка <span className="mono">segment</span> стоит «клиент» (несколько значений через <span className="mono">|</span>, «не равно» —{' '}
+              <span className="mono">!=</span>). Остальным агент этой строки не получит вовсе.
+            </div>
           </div>
           <div className="card">
             <h2>Форма: что выяснить</h2>
