@@ -101,7 +101,8 @@ https://console.gapi.uz/docs/en/agents.html#prompt. What matters most:
   name (`import_contacts` answers the names); give each a default that reads well when the column is empty.
 - A line for some of the people only: start it with `{{if segment=client|partner}}` (or `!=`). It stays in the
   instruction, without the mark, for a person whose column `segment` holds one of those values, and is left out
-  for everyone else: the agent cannot say what it was never given. Use it for what depends on who is called (an
+  for everyone else: the agent cannot say what it was never given. Several marks in a row must all hold
+  (`{{if segment=client}}{{if client_name!=—}} ...`). Use it for what depends on who is called (an
   existing customer is thanked, a new one is not), instead of asking the model to decide from a variable.
 - The whole instruction is at most 8,000 characters; `get_agent` shows it as the model reads it.
 

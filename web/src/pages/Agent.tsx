@@ -190,7 +190,7 @@ export default function AgentPage() {
             <div className="muted small" style={{ marginTop: 6 }}>
               Строка только для части людей: начните её с <span className="mono">{'{{if segment=клиент}}'}</span>, и она попадёт в инструкцию только тем, у кого в колонке
               списка <span className="mono">segment</span> стоит «клиент» (несколько значений через <span className="mono">|</span>, «не равно» —{' '}
-              <span className="mono">!=</span>). Остальным агент этой строки не получит вовсе.
+              <span className="mono">!=</span>; несколько условий подряд должны выполняться все). Остальным агент этой строки не получит вовсе.
             </div>
           </div>
           <div className="card">

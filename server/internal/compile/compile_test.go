@@ -138,6 +138,7 @@ func TestConditionalLines(t *testing.T) {
 1. Salom: {{studio_greeting}}
 {{if segment=client|Наш  Клиент}}   Keyin: «Hamkorlik uchun rahmat!»
 {{if segment!=client|наш клиент}}   Keyin: «Tanishganimdan xursandman.»
+{{if segment=client}}{{if client_name!=—}}   «{{client_name}}, yana bir bor rahmat.»
 2. Savol.`}
 	if p := Check(spec, DefaultLimits); len(p) > 0 {
 		t.Fatal(p)
@@ -171,6 +172,11 @@ func TestConditionalLines(t *testing.T) {
 		if _, ok := agent.Variables["segment"]; !ok {
 			t.Errorf("%s: segment is not declared", name)
 		}
+	}
+	both, _ := Build("a", spec, DefaultLimits, map[string]string{"client_name": "Jasur", "segment": "client"})
+	one, _ := Build("a", spec, DefaultLimits, map[string]string{"segment": "client"})
+	if !strings.Contains(both.Prompt, "yana bir bor rahmat") || strings.Contains(one.Prompt, "yana bir bor rahmat") {
+		t.Error("two conditions in a row must both hold")
 	}
 	spec.Script = "Salom. {{if segment=client}} rahmat"
 	if p := Check(spec, DefaultLimits); len(p) == 0 {

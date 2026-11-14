@@ -35,6 +35,7 @@ var (
 	// A line for some of the people only: "{{if segment=client|partner}} text"
 	// stays in the instruction, without the mark, when the person's value of
 	// the variable is one of those listed; "!=" when it is none of them.
+	// Several marks in a row at the start of a line must all hold.
 	cond  = regexp.MustCompile(`^(\s*)\{\{\s*if\s+([a-z][a-z0-9_]{0,39})\s*(!?=)([^{}]*)\}\}[ \t]?`)
 	anyIf = regexp.MustCompile(`\{\{\s*if\b[^{}]*\}\}`)
 	// Filled in by Gapi at the start of a call, never declared.
@@ -83,7 +84,10 @@ func Check(s model.Spec, lim Limits) []Problem {
 		}
 	}
 	for _, line := range strings.Split(s.Script, "\n") {
-		if anyIf.MatchString(cond.ReplaceAllString(line, "")) {
+		for cond.MatchString(line) {
+			line = cond.ReplaceAllString(line, "$1")
+		}
+		if anyIf.MatchString(line) {
 			add("script", "a condition is written at the start of its line as {{if name=value}} or {{if name!=value}}, values separated by |")
 			break
 		}
@@ -153,10 +157,11 @@ func declared(s model.Spec) map[string]string {
 		}
 	}
 	for _, line := range strings.Split(s.Script, "\n") {
-		if m := cond.FindStringSubmatch(line); m != nil {
+		for m := cond.FindStringSubmatch(line); m != nil; m = cond.FindStringSubmatch(line) {
 			if _, ok := out[m[2]]; !ok && !platformVars[m[2]] {
 				out[m[2]] = ""
 			}
+			line = m[1] + line[len(m[0]):]
 		}
 	}
 	return out
@@ -174,20 +179,22 @@ func conditional(script string, values map[string]string, all bool) string {
 	lines := strings.Split(script, "\n")
 	kept := lines[:0:0]
 	for _, line := range lines {
-		m := cond.FindStringSubmatch(line)
-		if m == nil {
-			kept = append(kept, line)
-			continue
-		}
-		have := strings.ToLower(strings.Join(strings.Fields(values[m[2]]), " "))
-		among := false
-		for _, v := range strings.Split(m[4], "|") {
-			if strings.ToLower(strings.Join(strings.Fields(v), " ")) == have {
-				among = true
+		keep := true
+		for m := cond.FindStringSubmatch(line); m != nil; m = cond.FindStringSubmatch(line) {
+			have := strings.ToLower(strings.Join(strings.Fields(values[m[2]]), " "))
+			among := false
+			for _, v := range strings.Split(m[4], "|") {
+				if strings.ToLower(strings.Join(strings.Fields(v), " ")) == have {
+					among = true
+				}
 			}
+			if among != (m[3] == "=") {
+				keep = false
+			}
+			line = m[1] + line[len(m[0]):]
 		}
-		if all || among == (m[3] == "=") {
-			kept = append(kept, m[1]+line[len(m[0]):])
+		if keep || all {
+			kept = append(kept, line)
 		}
 	}
 	return strings.Join(kept, "\n")
